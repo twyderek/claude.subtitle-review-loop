@@ -1,0 +1,9 @@
+Subtitle cleanup rules should be provided by each project owner.
+
+Example only:
+
+1. Normalize official product names according to the supplied glossary.
+2. Remove only filler words listed by the project owner.
+3. Keep punctuation rules defined by the project owner.
+4. Preserve technical terms exactly as written in the glossary.
+5. If no rule is provided for a case, do not invent one.

@@ -1,0 +1,16 @@
+workspace/*
+!workspace/README.md
+*.mp4
+*.mov
+*.wav
+*.m4a
+*.mp3
+*.aac
+*.srt
+*.vtt
+*.ass
+!examples/*.srt
+node_modules/
+dist/
+.DS_Store
+Thumbs.db
