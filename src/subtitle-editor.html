@@ -83,6 +83,10 @@
     .stage-panel { display: none; height: 100%; min-height: 0; }
     .stage-panel.active { display: grid; grid-template-rows: auto 1fr; }
     .tool-row { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; border-bottom: 1px solid var(--line); }
+    .duration-tools { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 5px 6px; border: 1px solid var(--line); border-radius: 8px; background: #0a1224; }
+    .duration-tools label { color: var(--muted); font-size: 12px; }
+    .duration-tools input { width: 76px; min-height: 28px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: #091225; }
+    .duration-tools button { min-height: 28px; padding: 0 9px; border-radius: 6px; }
     .search { flex: 1 1 240px; min-height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: #0a1224; outline: none; }
     .cue-list { min-height: 0; overflow: auto; padding: 12px 14px 20px; }
     .cue { display: grid; grid-template-columns: 84px 1fr; gap: 10px; margin-bottom: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
@@ -93,6 +97,14 @@
     .time { color: var(--muted); font-size: 12px; line-height: 1.35; word-break: break-word; }
     .cue textarea { width: 100%; min-height: 78px; resize: vertical; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: #091225; outline: none; line-height: 1.45; }
     .cue textarea:focus { border-color: var(--accent); }
+    .cue-body { display: grid; gap: 8px; min-width: 0; }
+    .cue-time-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--muted); font-size: 12px; }
+    .cue-time-tools input { width: 72px; min-height: 28px; padding: 0 7px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: #091225; }
+    .cue-time-tools button { min-height: 28px; padding: 0 8px; border-radius: 6px; }
+    .cue-actions { display: grid; gap: 6px; }
+    .cue-actions button.danger { border-color: #8f3f4b; background: #5c1f2a; }
+    .cue-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .duration-label { min-width: 72px; color: var(--accent); }
     .chip { display: inline-flex; align-items: center; justify-content: center; min-height: 24px; padding: 0 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--good); font-size: 12px; }
     .chip.warn { color: var(--warn); border-color: #80642c; }
 
@@ -168,6 +180,12 @@
           <section id="proofreadPanel" class="stage-panel active">
             <div class="tool-row">
               <input id="search" class="search" type="search" placeholder="搜尋字幕文字">
+              <div class="duration-tools" aria-label="全片字幕時長調整">
+                <label for="globalDurationDelta">全片時長秒數</label>
+                <input id="globalDurationDelta" type="number" min="0.1" max="30" step="0.1" value="0.5">
+                <button id="shortenAllDurations" type="button">全部縮短</button>
+                <button id="extendAllDurations" type="button">全部延長</button>
+              </div>
               <button id="saveSrt">另存 SRT</button>
             </div>
             <div class="cue-list" id="cueList"></div>
@@ -276,6 +294,7 @@
       cues: [],
       activeIndex: -1,
       changed: new Set(),
+      structureChanged: false,
       search: "",
       loopActive: false,
       videoPath: "workspace/media.mp4",
@@ -285,7 +304,8 @@
     const ids = [
       "video", "cueList", "status", "currentText", "currentMeta", "currentRuleState",
       "cueCount", "changedCount", "warningCount", "clock", "burnCaption", "burnOverlay",
-      "proofreadPanel", "burnPanel", "stageProofread", "stageBurn", "search", "commandBox"
+      "proofreadPanel", "burnPanel", "stageProofread", "stageBurn", "search", "commandBox",
+      "globalDurationDelta"
     ];
     const el = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
     const settingIds = ["fontFamily", "fontSize", "fontColor", "outlineColor", "outlineWidth", "subtitlePosition", "marginV", "bold"];
@@ -297,6 +317,8 @@
     document.getElementById("downloadSrt").addEventListener("click", downloadSrt);
     document.getElementById("saveSrt").addEventListener("click", saveSrt);
     document.getElementById("savePackage").addEventListener("click", saveReviewPackage);
+    document.getElementById("shortenAllDurations").addEventListener("click", () => adjustAllDurations(-getGlobalDurationDelta()));
+    document.getElementById("extendAllDurations").addEventListener("click", () => adjustAllDurations(getGlobalDurationDelta()));
     document.getElementById("back5").addEventListener("click", () => el.video.currentTime = Math.max(0, el.video.currentTime - 5));
     document.getElementById("forward5").addEventListener("click", () => el.video.currentTime = Math.min(el.video.duration || Infinity, el.video.currentTime + 5));
     document.getElementById("playPause").addEventListener("click", () => el.video.paused ? el.video.play() : el.video.pause());
@@ -356,6 +378,7 @@
       state.cues = parseSrt(text);
       state.activeIndex = -1;
       state.changed.clear();
+      state.structureChanged = false;
       renderCueList();
       updateStats();
       updateActiveCue(true);
@@ -389,7 +412,9 @@
             start: match ? parseTime(match[1]) : 0,
             end: match ? parseTime(match[2]) : 0,
             text: textLines.join("\n").trim(),
-            originalText: textLines.join("\n").trim()
+            originalText: textLines.join("\n").trim(),
+            originalStart: match ? parseTime(match[1]) : 0,
+            originalEnd: match ? parseTime(match[2]) : 0
           };
         })
         .filter((cue) => cue.text || cue.end > cue.start);
@@ -410,13 +435,35 @@
           <div class="cue-meta">
             <div class="cue-number">#${index + 1}</div>
             <div class="time">${cue.startRaw}<br>${cue.endRaw}</div>
-            <button type="button" title="跳到此字幕">跳轉</button>
+            <button type="button" data-action="jump" title="跳到此字幕">跳轉</button>
             <span class="${hasRuleWarning(cue.text) ? "chip warn" : "chip"}">${hasRuleWarning(cue.text) ? "待檢查" : "OK"}</span>
+            <div class="cue-actions">
+              <button type="button" data-action="merge" ${index >= state.cues.length - 1 ? "disabled" : ""}>合併下句</button>
+              <button type="button" data-action="delete" class="danger">刪除</button>
+            </div>
           </div>
-          <textarea aria-label="字幕 ${index + 1}">${escapeHtml(cue.text)}</textarea>
+          <div class="cue-body">
+            <textarea aria-label="字幕 ${index + 1}">${escapeHtml(cue.text)}</textarea>
+            <div class="cue-time-tools" aria-label="調整第 ${index + 1} 句字幕時長">
+              <span class="duration-label">時長 ${formatDuration(cue.end - cue.start)}</span>
+              <input type="number" min="0.1" max="30" step="0.1" value="${escapeHtml(String(el.globalDurationDelta.value || "0.5"))}" aria-label="單句調整秒數">
+              <button type="button" data-action="shorten">縮短</button>
+              <button type="button" data-action="extend">延長</button>
+            </div>
+          </div>
         `;
-        item.querySelector("button").addEventListener("click", () => jumpToCue(index));
+        item.querySelector('[data-action="jump"]').addEventListener("click", () => jumpToCue(index));
+        item.querySelector('[data-action="merge"]').addEventListener("click", () => mergeCueWithNext(index));
+        item.querySelector('[data-action="delete"]').addEventListener("click", () => deleteCue(index));
         item.querySelector("textarea").addEventListener("input", (event) => updateCue(index, event.target.value));
+        item.querySelector('[data-action="shorten"]').addEventListener("click", () => {
+          const delta = readCueDurationDelta(item);
+          adjustCueDuration(index, -delta);
+        });
+        item.querySelector('[data-action="extend"]').addEventListener("click", () => {
+          const delta = readCueDurationDelta(item);
+          adjustCueDuration(index, delta);
+        });
         fragment.appendChild(item);
       });
       el.cueList.appendChild(fragment);
@@ -425,8 +472,7 @@
 
     function updateCue(index, value) {
       state.cues[index].text = value;
-      if (value !== state.cues[index].originalText) state.changed.add(index);
-      else state.changed.delete(index);
+      syncChangedState(index);
       const cueNode = el.cueList.querySelector(`[data-index="${index}"]`);
       if (cueNode) {
         cueNode.classList.toggle("changed", state.changed.has(index));
@@ -438,6 +484,131 @@
       updateStats();
       updateActiveCue(true);
       updateBurnPreview();
+    }
+
+    function readCueDurationDelta(cueNode) {
+      const input = cueNode.querySelector(".cue-time-tools input");
+      const value = Number(input?.value);
+      return Number.isFinite(value) && value > 0 ? value : getGlobalDurationDelta();
+    }
+
+    function getGlobalDurationDelta() {
+      const value = Number(el.globalDurationDelta.value);
+      return Number.isFinite(value) && value > 0 ? value : 0.5;
+    }
+
+    function adjustAllDurations(delta) {
+      if (!state.cues.length) {
+        statusMessage("尚未載入字幕，無法調整時長");
+        return;
+      }
+      let adjusted = 0;
+      state.cues.forEach((cue, index) => {
+        if (applyCueDurationDelta(index, delta)) adjusted += 1;
+      });
+      renderCueList();
+      updateActiveCue(true);
+      updateBurnPreview();
+      statusMessage(`${delta > 0 ? "已延長" : "已縮短"}全片 ${adjusted} 句字幕時長 ${Math.abs(delta).toFixed(1)} 秒`);
+    }
+
+    function adjustCueDuration(index, delta) {
+      if (!state.cues[index]) return;
+      const changed = applyCueDurationDelta(index, delta);
+      updateCueTimingNode(index);
+      updateStats();
+      updateActiveCue(true);
+      updateBurnPreview();
+      statusMessage(changed
+        ? `已${delta > 0 ? "延長" : "縮短"}第 ${index + 1} 句字幕 ${Math.abs(delta).toFixed(1)} 秒`
+        : `第 ${index + 1} 句已達可調整範圍邊界`);
+    }
+
+    function applyCueDurationDelta(index, delta) {
+      const cue = state.cues[index];
+      const minDuration = 0.1;
+      const nextStart = state.cues[index + 1]?.start ?? Number.POSITIVE_INFINITY;
+      const upperLimit = Number.isFinite(nextStart) ? Math.max(cue.start + minDuration, nextStart - 0.001) : Number.POSITIVE_INFINITY;
+      const targetEnd = cue.end + delta;
+      const nextEnd = Math.min(Math.max(targetEnd, cue.start + minDuration), upperLimit);
+      if (Math.abs(nextEnd - cue.end) < 0.001) return false;
+      cue.end = roundTime(nextEnd);
+      cue.endRaw = formatSrtTime(cue.end);
+      syncChangedState(index);
+      return true;
+    }
+
+    function syncChangedState(index) {
+      const cue = state.cues[index];
+      const textChanged = cue.text !== cue.originalText;
+      const timingChanged = Math.abs(cue.start - cue.originalStart) > 0.001 || Math.abs(cue.end - cue.originalEnd) > 0.001;
+      if (textChanged || timingChanged) state.changed.add(index);
+      else state.changed.delete(index);
+    }
+
+    function updateCueTimingNode(index) {
+      const cue = state.cues[index];
+      const cueNode = el.cueList.querySelector(`[data-index="${index}"]`);
+      if (!cueNode) return;
+      cueNode.classList.toggle("changed", state.changed.has(index));
+      const time = cueNode.querySelector(".time");
+      if (time) time.innerHTML = `${cue.startRaw}<br>${cue.endRaw}`;
+      const duration = cueNode.querySelector(".duration-label");
+      if (duration) duration.textContent = `時長 ${formatDuration(cue.end - cue.start)}`;
+    }
+
+    function deleteCue(index) {
+      if (!state.cues[index]) return;
+      const removedNumber = index + 1;
+      state.cues.splice(index, 1);
+      state.structureChanged = true;
+      refreshCueIds();
+      rebuildChangedSet();
+      if (!state.cues.length) {
+        state.activeIndex = -1;
+      } else if (state.activeIndex === index) {
+        state.activeIndex = Math.min(index, state.cues.length - 1);
+      } else if (state.activeIndex > index) {
+        state.activeIndex -= 1;
+      }
+      renderCueList();
+      updateActiveCue(true);
+      updateBurnPreview();
+      statusMessage(`已刪除第 ${removedNumber} 句字幕`);
+    }
+
+    function mergeCueWithNext(index) {
+      const current = state.cues[index];
+      const next = state.cues[index + 1];
+      if (!current || !next) {
+        statusMessage("最後一句字幕沒有下一句可合併");
+        return;
+      }
+      current.text = [current.text.trim(), next.text.trim()].filter(Boolean).join("\n");
+      current.end = next.end;
+      current.endRaw = next.endRaw;
+      state.cues.splice(index + 1, 1);
+      state.structureChanged = true;
+      refreshCueIds();
+      rebuildChangedSet();
+      state.activeIndex = index;
+      renderCueList();
+      setActiveCue(index);
+      updateBurnPreview();
+      statusMessage(`已合併第 ${index + 1} 句與下一句字幕`);
+    }
+
+    function refreshCueIds() {
+      state.cues.forEach((cue, index) => cue.id = index + 1);
+    }
+
+    function rebuildChangedSet() {
+      state.changed.clear();
+      state.cues.forEach((cue, index) => {
+        const textChanged = cue.text !== cue.originalText;
+        const timingChanged = Math.abs(cue.start - cue.originalStart) > 0.001 || Math.abs(cue.end - cue.originalEnd) > 0.001;
+        if (textChanged || timingChanged) state.changed.add(index);
+      });
     }
 
     function jumpToCue(index) {
@@ -473,12 +644,14 @@
     }
 
     function applyRulesToAll() {
+      const beforeCount = state.cues.length;
       state.cues = state.cues.map((cue, index) => {
         const text = cleanSubtitleText(cue.text);
-        if (text !== cue.text) state.changed.add(index);
         return { ...cue, text };
       }).filter((cue) => cue.text.trim());
-      state.cues.forEach((cue, index) => cue.id = index + 1);
+      if (state.cues.length !== beforeCount) state.structureChanged = true;
+      refreshCueIds();
+      rebuildChangedSet();
       renderCueList();
       updateActiveCue(true);
       updateBurnPreview();
@@ -556,7 +729,7 @@
 
     function updateStats() {
       el.cueCount.textContent = String(state.cues.length);
-      el.changedCount.textContent = String(state.changed.size);
+      el.changedCount.textContent = String(state.changed.size + (state.structureChanged ? 1 : 0));
       el.warningCount.textContent = String(state.cues.filter((cue) => hasRuleWarning(cue.text)).length);
     }
 
@@ -604,7 +777,8 @@
         manifest: {
           savedAt: new Date().toISOString(),
           cueCount: state.cues.length,
-          changedCount: state.changed.size,
+          changedCount: state.changed.size + (state.structureChanged ? 1 : 0),
+          structureChanged: state.structureChanged,
           warningCount: state.cues.filter((cue) => hasRuleWarning(cue.text)).length,
           sourceVideo: state.videoPath,
           sourceSubtitle: state.srtPath,
@@ -662,6 +836,24 @@
       const [hh, mm, rest] = value.split(":");
       const [ss, ms] = rest.split(",");
       return Number(hh) * 3600 + Number(mm) * 60 + Number(ss) + Number(ms) / 1000;
+    }
+
+    function formatSrtTime(seconds) {
+      const safeSeconds = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
+      const totalMs = Math.round(safeSeconds * 1000);
+      const hh = String(Math.floor(totalMs / 3600000)).padStart(2, "0");
+      const mm = String(Math.floor((totalMs % 3600000) / 60000)).padStart(2, "0");
+      const ss = String(Math.floor((totalMs % 60000) / 1000)).padStart(2, "0");
+      const ms = String(totalMs % 1000).padStart(3, "0");
+      return `${hh}:${mm}:${ss},${ms}`;
+    }
+
+    function formatDuration(seconds) {
+      return `${Math.max(0, seconds).toFixed(1)} 秒`;
+    }
+
+    function roundTime(seconds) {
+      return Math.round(seconds * 1000) / 1000;
     }
 
     function formatClock(seconds) {
