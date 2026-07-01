@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, copyFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const root = process.cwd();
@@ -58,9 +58,10 @@ async function main() {
   const cleanedPath = path.join(workDir, "rule-cleaned.srt");
   const reportPath = path.join(workDir, "rule-cleaned-report.md");
   await run("node", ["src/apply_subtitle_rules.mjs", draftPath, cleanedPath, reportPath], { cwd: root });
+  const timingReport = repairSrtTiming(cleanedPath);
 
   const verificationPath = path.join(workDir, "youtube-ingest-verification.md");
-  writeFileSync(verificationPath, renderVerification({ metadata, workDir, draftPath, cleanedPath, reportPath, sourceMode }), "utf8");
+  writeFileSync(verificationPath, renderVerification({ metadata, workDir, draftPath, cleanedPath, reportPath, sourceMode, timingReport }), "utf8");
 
   const result = {
     ok: true,
@@ -95,7 +96,6 @@ async function readYoutubeMetadata(url) {
 }
 
 async function tryDownloadSubtitles(url, workDir) {
-  const before = new Set(readdirSync(workDir));
   await run("yt-dlp", [
     "--skip-download",
     "--no-playlist",
@@ -111,9 +111,20 @@ async function tryDownloadSubtitles(url, workDir) {
   ], { cwd: root, allowFailure: true });
 
   const candidates = readdirSync(workDir)
-    .filter((name) => !before.has(name) && name.toLowerCase().endsWith(".srt"))
+    .filter((name) => name.toLowerCase().endsWith(".srt"))
+    .filter((name) => name.toLowerCase().startsWith("youtube."))
+    .sort((a, b) => subtitleRank(a) - subtitleRank(b))
     .map((name) => path.join(workDir, name));
   return candidates[0] || null;
+}
+
+function subtitleRank(name) {
+  const lower = name.toLowerCase();
+  if (lower.includes("zh-tw") || lower.includes("zh-hant")) return 0;
+  if (lower.includes(".zh.")) return 1;
+  if (lower.includes("zh-cn") || lower.includes("zh-hans")) return 2;
+  if (lower.includes(".en.")) return 3;
+  return 10;
 }
 
 async function downloadAudio(url, workDir) {
@@ -159,7 +170,87 @@ async function runWhisper(audioPath, workDir) {
   });
 }
 
-function renderVerification({ metadata, workDir, draftPath, cleanedPath, reportPath, sourceMode }) {
+function repairSrtTiming(srtPath) {
+  const source = readTextFile(srtPath);
+  const blocks = source
+    .trim()
+    .split(/\r?\n\r?\n/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+  const timePattern = /^(\d\d:\d\d:\d\d,\d{3}) --> (\d\d:\d\d:\d\d,\d{3})$/;
+  const cues = [];
+  const errors = [];
+
+  blocks.forEach((block, index) => {
+    const lines = block.split(/\r?\n/);
+    const match = lines[1]?.match(timePattern);
+    if (!match || lines.length < 3) {
+      errors.push(index + 1);
+      return;
+    }
+    cues.push({
+      start: parseSrtTime(match[1]),
+      end: parseSrtTime(match[2]),
+      text: lines.slice(2).join("\n")
+    });
+  });
+
+  let overlapsFixed = 0;
+  for (let index = 0; index < cues.length - 1; index += 1) {
+    const cue = cues[index];
+    const next = cues[index + 1];
+    if (cue.end > next.start) {
+      const repairedEnd = Math.max(cue.start + 100, next.start - 1);
+      if (repairedEnd < cue.end) {
+        cue.end = repairedEnd;
+        overlapsFixed += 1;
+      }
+    }
+  }
+
+  let remainingOverlaps = 0;
+  let nonPositiveDurations = 0;
+  for (let index = 0; index < cues.length; index += 1) {
+    if (cues[index].end <= cues[index].start) nonPositiveDurations += 1;
+    if (index > 0 && cues[index].start < cues[index - 1].end) remainingOverlaps += 1;
+  }
+
+  const output = cues
+    .map((cue, index) => `${index + 1}\n${formatSrtTime(cue.start)} --> ${formatSrtTime(cue.end)}\n${cue.text}`)
+    .join("\n\n");
+  writeFileSync(srtPath, `${output}\n`, "utf8");
+
+  return {
+    cueCount: cues.length,
+    parseErrors: errors.length,
+    overlapsFixed,
+    remainingOverlaps,
+    nonPositiveDurations
+  };
+}
+
+function readTextFile(filePath) {
+  return existsSync(filePath) ? readFileSync(filePath, "utf8").replace(/^\uFEFF/, "") : "";
+}
+
+function parseSrtTime(value) {
+  const [hours, minutes, rest] = value.split(":");
+  const [seconds, milliseconds] = rest.split(",");
+  return ((Number(hours) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1000 + Number(milliseconds);
+}
+
+function formatSrtTime(totalMilliseconds) {
+  let value = Math.max(0, Math.round(totalMilliseconds));
+  const hours = Math.floor(value / 3600000);
+  value %= 3600000;
+  const minutes = Math.floor(value / 60000);
+  value %= 60000;
+  const seconds = Math.floor(value / 1000);
+  const milliseconds = value % 1000;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")},${String(milliseconds).padStart(3, "0")}`;
+}
+
+function renderVerification({ metadata, workDir, draftPath, cleanedPath, reportPath, sourceMode, timingReport }) {
   return [
     "# YouTube Subtitle Ingest Verification",
     "",
@@ -172,6 +263,11 @@ function renderVerification({ metadata, workDir, draftPath, cleanedPath, reportP
     `- Draft subtitle: ${relative(draftPath)}`,
     `- Rule-cleaned subtitle: ${relative(cleanedPath)}`,
     `- Rule-cleaning report: ${relative(reportPath)}`,
+    `- Cue count: ${timingReport.cueCount}`,
+    `- Timing overlaps fixed: ${timingReport.overlapsFixed}`,
+    `- Remaining timing overlaps: ${timingReport.remainingOverlaps}`,
+    `- Non-positive durations: ${timingReport.nonPositiveDurations}`,
+    `- SRT parse errors: ${timingReport.parseErrors}`,
     "",
     "## Notes",
     "- Existing YouTube captions are preferred when available.",
