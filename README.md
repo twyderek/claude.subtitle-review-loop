@@ -37,6 +37,7 @@ files in a local `workspace/` folder.
 - FFmpeg, for extracting audio, checking media files, and burning subtitles
 - Python 3.10 or later, if you want to run local Whisper transcription
 - Whisper or another ASR tool, for generating draft SRT files
+- yt-dlp, if you want to import subtitles or audio from a YouTube URL
 
 ### Windows Installation Examples
 
@@ -47,6 +48,7 @@ winget install Gyan.FFmpeg
 winget install Python.Python.3.12
 python -m pip install --upgrade pip
 python -m pip install -U openai-whisper
+python -m pip install -U yt-dlp
 ```
 
 ### macOS Installation Examples
@@ -54,6 +56,7 @@ python -m pip install -U openai-whisper
 ```bash
 brew install node git ffmpeg python
 python3 -m pip install -U openai-whisper
+python3 -m pip install -U yt-dlp
 ```
 
 ### Linux Installation Examples
@@ -62,6 +65,7 @@ python3 -m pip install -U openai-whisper
 sudo apt update
 sudo apt install -y nodejs npm git ffmpeg python3 python3-pip
 python3 -m pip install -U openai-whisper
+python3 -m pip install -U yt-dlp
 ```
 
 ## Quick Start
@@ -139,6 +143,41 @@ Rename or copy the generated SRT to the editor's default filename if needed:
 ```powershell
 Copy-Item workspace\media.srt workspace\media.rule-cleaned.srt
 ```
+
+## Import From A YouTube URL
+
+If your source video is already on YouTube and you have the rights to process
+it, you can import subtitles from the URL. The workflow first tries to download
+existing YouTube captions. If no reusable captions are available, it downloads
+audio and runs local Whisper transcription.
+
+Required tools:
+
+- `yt-dlp`
+- `ffmpeg`
+- `whisper`, when no existing captions are available
+
+Command line:
+
+```bash
+npm run youtube:ingest -- --url "https://www.youtube.com/watch?v=VIDEO_ID" --rule workspace/rule.txt
+```
+
+Default outputs are saved in a dedicated folder:
+
+```text
+workspace/youtube-VIDEO_ID-title/
+metadata.json
+rule.txt
+draft.srt
+rule-cleaned.srt
+rule-cleaned-report.md
+youtube-ingest-verification.md
+```
+
+You can also start the browser editor and paste the YouTube URL into the
+YouTube import field. When the import completes, the generated
+`rule-cleaned.srt` loads into the editor for human review.
 
 ## Apply Subtitle Rules
 

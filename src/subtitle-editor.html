@@ -52,6 +52,9 @@
     }
     .video-shell { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
     video { width: 100%; height: 100%; display: block; background: #000; }
+    .youtube-frame { width: 100%; height: 100%; display: none; border: 0; background: #000; }
+    .video-shell.youtube-mode video { display: none; }
+    .video-shell.youtube-mode .youtube-frame { display: block; }
     .burn-overlay {
       position: absolute; left: 5%; right: 5%; bottom: 22px; z-index: 2;
       display: flex; justify-content: center; pointer-events: none;
@@ -64,6 +67,12 @@
     .player-controls, .stage-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
     .stage-tabs button { min-height: 42px; }
     .stage-tabs button.active { border-color: var(--accent); background: #123b55; }
+    .youtube-import { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+    .youtube-import input {
+      min-height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px;
+      color: var(--text); background: #0a1224; outline: none;
+    }
+    .youtube-import input:focus { border-color: var(--accent); }
     .cue-preview, .stage-panel, .settings-panel {
       border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel);
     }
@@ -145,6 +154,7 @@
       <section class="viewer">
         <div class="video-shell">
           <video id="video" controls preload="metadata" src="../workspace/media.mp4"></video>
+          <iframe id="youtubeFrame" class="youtube-frame" title="YouTube preview" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
           <div id="burnOverlay" class="burn-overlay"><div id="burnCaption" class="burn-caption"></div></div>
         </div>
         <div class="player-controls">
@@ -152,6 +162,10 @@
           <button id="playPause">播放/暫停</button>
           <button id="forward5">+5 秒</button>
           <button id="loopCue">循環目前字幕</button>
+        </div>
+        <div class="youtube-import">
+          <input id="youtubeUrl" type="url" placeholder="貼上 YouTube 影片網址">
+          <button id="importYoutube" type="button">匯入 YouTube 字幕</button>
         </div>
         <div class="stage-tabs">
           <button id="stageProofread" class="active">階段 1：字幕校稿</button>
@@ -305,7 +319,7 @@
       "video", "cueList", "status", "currentText", "currentMeta", "currentRuleState",
       "cueCount", "changedCount", "warningCount", "clock", "burnCaption", "burnOverlay",
       "proofreadPanel", "burnPanel", "stageProofread", "stageBurn", "search", "commandBox",
-      "globalDurationDelta"
+      "globalDurationDelta", "youtubeUrl", "importYoutube", "youtubeFrame"
     ];
     const el = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
     const settingIds = ["fontFamily", "fontSize", "fontColor", "outlineColor", "outlineWidth", "subtitlePosition", "marginV", "bold"];
@@ -317,6 +331,10 @@
     document.getElementById("downloadSrt").addEventListener("click", downloadSrt);
     document.getElementById("saveSrt").addEventListener("click", saveSrt);
     document.getElementById("savePackage").addEventListener("click", saveReviewPackage);
+    el.importYoutube.addEventListener("click", importYoutubeSubtitles);
+    el.youtubeUrl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") importYoutubeSubtitles();
+    });
     document.getElementById("shortenAllDurations").addEventListener("click", () => adjustAllDurations(-getGlobalDurationDelta()));
     document.getElementById("extendAllDurations").addEventListener("click", () => adjustAllDurations(getGlobalDurationDelta()));
     document.getElementById("back5").addEventListener("click", () => el.video.currentTime = Math.max(0, el.video.currentTime - 5));
@@ -347,6 +365,7 @@
     updateBurnPreview();
 
     async function loadDefaultAssets() {
+      showLocalVideo();
       el.video.src = defaultVideoPath;
       state.videoPath = "workspace/media.mp4";
       state.srtPath = "workspace/media.rule-cleaned.srt";
@@ -363,6 +382,7 @@
       const file = event.target.files[0];
       if (!file) return;
       el.video.src = URL.createObjectURL(file);
+      showLocalVideo();
       state.videoPath = file.name;
       statusMessage(`已載入影片：${file.name}`);
     }
@@ -484,6 +504,60 @@
       updateStats();
       updateActiveCue(true);
       updateBurnPreview();
+    }
+
+    async function importYoutubeSubtitles() {
+      const url = el.youtubeUrl.value.trim();
+      if (!url) {
+        statusMessage("請先貼上 YouTube 影片網址");
+        return;
+      }
+
+      el.importYoutube.disabled = true;
+      statusMessage("正在匯入 YouTube 字幕，較長影片可能需要一段時間");
+      try {
+        const response = await fetch("/api/youtube-ingest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url, rulePath: "workspace/rule.txt" })
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+
+        const subtitleResponse = await fetch(`../${result.subtitle}`, { cache: "no-store" });
+        if (!subtitleResponse.ok) throw new Error(`字幕載入失敗：HTTP ${subtitleResponse.status}`);
+
+        state.videoPath = result.sourceUrl;
+        state.srtPath = result.subtitle;
+        showYoutubePreview(url);
+        loadSrtText(await subtitleResponse.text(), `已匯入 YouTube 字幕：${result.folder}`);
+      } catch (error) {
+        statusMessage(`YouTube 匯入失敗：${error.message}`);
+      } finally {
+        el.importYoutube.disabled = false;
+      }
+    }
+
+    function showYoutubePreview(url) {
+      const videoId = extractYoutubeId(url);
+      if (!videoId) return;
+      el.youtubeFrame.src = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}`;
+      el.video.closest(".video-shell").classList.add("youtube-mode");
+    }
+
+    function showLocalVideo() {
+      el.youtubeFrame.src = "";
+      el.video.closest(".video-shell").classList.remove("youtube-mode");
+    }
+
+    function extractYoutubeId(value) {
+      try {
+        const url = new URL(value);
+        if (url.hostname.includes("youtu.be")) return url.pathname.split("/").filter(Boolean)[0] || "";
+        return url.searchParams.get("v") || "";
+      } catch {
+        return "";
+      }
     }
 
     function readCueDurationDelta(cueNode) {

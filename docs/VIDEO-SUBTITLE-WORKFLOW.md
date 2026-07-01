@@ -36,10 +36,28 @@ Preferred order:
 
 1. Reuse an existing subtitle file only when the source video is verified by
    hash, duration, or package context.
-2. Use ASR transcription when no trusted subtitle exists.
-3. Keep the original transcript or subtitle as `media.srt`.
+2. For YouTube URLs, reuse existing YouTube captions when they are available
+   and the user has the rights to process the video.
+3. Use ASR transcription when no trusted subtitle exists.
+4. Keep the original transcript or subtitle as `media.srt`.
 
 Never silently mix subtitles from a different video.
+
+For YouTube URL input, use:
+
+```powershell
+npm run youtube:ingest -- --url "https://www.youtube.com/watch?v=VIDEO_ID" --rule workspace/rule.txt
+```
+
+The import script creates a dedicated folder such as:
+
+```text
+workspace/youtube-VIDEO_ID-title/
+```
+
+The browser editor can also call the same workflow through its YouTube URL
+input field. The generated `rule-cleaned.srt` is loaded into the editor when
+the import finishes.
 
 On Windows, protect Whisper transcription from console encoding failures:
 

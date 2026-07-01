@@ -10,6 +10,7 @@
     "sample:subtitles": "node scripts/burn-subtitles.mjs --sample",
     "burn:subtitles": "node scripts/burn-subtitles.mjs",
     "clean:subtitles": "node src/apply_subtitle_rules.mjs",
+    "youtube:ingest": "node scripts/youtube-ingest.mjs",
     "build:toolkit": "node scripts/build-portable-toolkit.mjs"
   },
   "engines": {

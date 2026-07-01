@@ -2,6 +2,7 @@ import http from "node:http";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { spawn } from "node:child_process";
 
 const root = path.resolve(process.cwd());
 const port = 8787;
@@ -24,6 +25,17 @@ http.createServer(async (req, res) => {
     try {
       const payload = await readJsonBody(req);
       const result = await saveReviewPackage(payload);
+      sendJson(res, 200, result);
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url === "/api/youtube-ingest") {
+    try {
+      const payload = await readJsonBody(req);
+      const result = await ingestYoutube(payload);
       sendJson(res, 200, result);
     } catch (error) {
       sendJson(res, 400, { ok: false, error: error.message });
@@ -106,6 +118,64 @@ function readJsonBody(req) {
     });
     req.on("error", reject);
   });
+}
+
+async function ingestYoutube(payload) {
+  const youtubeUrl = String(payload?.url || "").trim();
+  if (!isAllowedYoutubeUrl(youtubeUrl)) {
+    throw new Error("Please provide a valid YouTube URL.");
+  }
+
+  const args = ["scripts/youtube-ingest.mjs", "--url", youtubeUrl, "--json"];
+  if (payload?.rulePath) args.push("--rule", String(payload.rulePath));
+  if (payload?.model) args.push("--model", String(payload.model));
+  if (payload?.language) args.push("--language", String(payload.language));
+
+  const output = await runNode(args);
+  const line = output.trim().split(/\r?\n/).filter(Boolean).at(-1);
+  if (!line) throw new Error("YouTube ingest did not return a result.");
+
+  let result;
+  try {
+    result = JSON.parse(line);
+  } catch {
+    throw new Error("YouTube ingest returned an unreadable result.");
+  }
+  if (!result.ok) throw new Error(result.error || "YouTube ingest failed.");
+  return result;
+}
+
+function runNode(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, args, {
+      cwd: root,
+      env: {
+        ...process.env,
+        PYTHONIOENCODING: "utf-8",
+        PYTHONUTF8: "1"
+      },
+      windowsHide: true
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => stdout += chunk.toString());
+    child.stderr.on("data", (chunk) => stderr += chunk.toString());
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve(stdout);
+      else reject(new Error(stderr.trim() || stdout.trim() || `Node exited with code ${code}`));
+    });
+  });
+}
+
+function isAllowedYoutubeUrl(value) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
+    return host === "youtube.com" || host === "youtu.be" || host === "m.youtube.com";
+  } catch {
+    return false;
+  }
 }
 
 async function saveReviewPackage(payload) {
