@@ -311,6 +311,10 @@
       structureChanged: false,
       search: "",
       loopActive: false,
+      playerMode: "local",
+      youtubePlayer: null,
+      youtubeReady: false,
+      youtubeTimer: null,
       videoPath: "",
       srtPath: ""
     };
@@ -337,9 +341,9 @@
     });
     document.getElementById("shortenAllDurations").addEventListener("click", () => adjustAllDurations(-getGlobalDurationDelta()));
     document.getElementById("extendAllDurations").addEventListener("click", () => adjustAllDurations(getGlobalDurationDelta()));
-    document.getElementById("back5").addEventListener("click", () => el.video.currentTime = Math.max(0, el.video.currentTime - 5));
-    document.getElementById("forward5").addEventListener("click", () => el.video.currentTime = Math.min(el.video.duration || Infinity, el.video.currentTime + 5));
-    document.getElementById("playPause").addEventListener("click", () => el.video.paused ? el.video.play() : el.video.pause());
+    document.getElementById("back5").addEventListener("click", () => seekBySeconds(-5));
+    document.getElementById("forward5").addEventListener("click", () => seekBySeconds(5));
+    document.getElementById("playPause").addEventListener("click", togglePlayback);
     document.getElementById("loopCue").addEventListener("click", () => {
       state.loopActive = !state.loopActive;
       document.getElementById("loopCue").classList.toggle("primary", state.loopActive);
@@ -353,12 +357,8 @@
     settingIds.forEach((id) => document.getElementById(id).addEventListener("input", updateBurnPreview));
 
     el.video.addEventListener("timeupdate", () => {
-      updateActiveCue();
-      el.clock.textContent = formatClock(el.video.currentTime);
-      if (state.loopActive && state.activeIndex >= 0) {
-        const cue = state.cues[state.activeIndex];
-        if (el.video.currentTime > cue.end) el.video.currentTime = cue.start;
-      }
+      if (state.playerMode !== "local") return;
+      updatePlaybackTime(el.video.currentTime);
     });
 
     resetEditorState("請載入影片與字幕，或貼上 YouTube 網址匯入");
@@ -401,7 +401,7 @@
       state.structureChanged = false;
       renderCueList();
       updateStats();
-      updateActiveCue(true);
+      updateActiveCue(getPlaybackTime(), true);
       updateBurnPreview();
       statusMessage(message);
     }
@@ -521,7 +521,7 @@
         chip.classList.toggle("warn", warning);
       }
       updateStats();
-      updateActiveCue(true);
+      updateActiveCue(getPlaybackTime(), true);
       updateBurnPreview();
     }
 
@@ -560,13 +560,107 @@
     function showYoutubePreview(url) {
       const videoId = extractYoutubeId(url);
       if (!videoId) return;
-      el.youtubeFrame.src = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}`;
+      state.playerMode = "youtube";
+      state.youtubeReady = false;
+      el.youtubeFrame.src = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
       el.video.closest(".video-shell").classList.add("youtube-mode");
+      ensureYoutubeApi().then(() => {
+        if (state.youtubePlayer?.loadVideoById) {
+          state.youtubeReady = true;
+          state.youtubePlayer.loadVideoById(videoId);
+          startYoutubeTimer();
+          return;
+        }
+        state.youtubePlayer = new YT.Player("youtubeFrame", {
+          videoId,
+          events: {
+            onReady: () => {
+              state.youtubeReady = true;
+              startYoutubeTimer();
+            },
+            onStateChange: () => startYoutubeTimer()
+          }
+        });
+      });
     }
 
     function showLocalVideo() {
-      el.youtubeFrame.src = "";
+      state.playerMode = "local";
+      stopYoutubeTimer();
+      if (state.youtubePlayer?.stopVideo) state.youtubePlayer.stopVideo();
+      state.youtubeReady = false;
       el.video.closest(".video-shell").classList.remove("youtube-mode");
+    }
+
+    function ensureYoutubeApi() {
+      if (window.YT?.Player) return Promise.resolve();
+      if (window.youtubeApiPromise) return window.youtubeApiPromise;
+      window.youtubeApiPromise = new Promise((resolve) => {
+        const previous = window.onYouTubeIframeAPIReady;
+        window.onYouTubeIframeAPIReady = () => {
+          if (typeof previous === "function") previous();
+          resolve();
+        };
+        const script = document.createElement("script");
+        script.src = "https://www.youtube.com/iframe_api";
+        document.head.appendChild(script);
+      });
+      return window.youtubeApiPromise;
+    }
+
+    function startYoutubeTimer() {
+      if (state.youtubeTimer) return;
+      state.youtubeTimer = window.setInterval(() => {
+        if (state.playerMode !== "youtube" || !state.youtubeReady || !state.youtubePlayer?.getCurrentTime) return;
+        updatePlaybackTime(state.youtubePlayer.getCurrentTime());
+      }, 250);
+    }
+
+    function stopYoutubeTimer() {
+      if (!state.youtubeTimer) return;
+      window.clearInterval(state.youtubeTimer);
+      state.youtubeTimer = null;
+    }
+
+    function updatePlaybackTime(seconds) {
+      updateActiveCue(seconds);
+      el.clock.textContent = formatClock(seconds);
+      if (state.loopActive && state.activeIndex >= 0) {
+        const cue = state.cues[state.activeIndex];
+        if (seconds > cue.end) seekToSeconds(cue.start);
+      }
+    }
+
+    function seekBySeconds(delta) {
+      const nextTime = Math.max(0, getPlaybackTime() + delta);
+      seekToSeconds(nextTime);
+    }
+
+    function getPlaybackTime() {
+      if (state.playerMode === "youtube" && state.youtubeReady && state.youtubePlayer?.getCurrentTime) {
+        return state.youtubePlayer.getCurrentTime();
+      }
+      return el.video.currentTime || 0;
+    }
+
+    function seekToSeconds(seconds) {
+      if (state.playerMode === "youtube" && state.youtubeReady && state.youtubePlayer?.seekTo) {
+        state.youtubePlayer.seekTo(Math.max(0, seconds), true);
+        updatePlaybackTime(Math.max(0, seconds));
+        return;
+      }
+      el.video.currentTime = Math.max(0, seconds);
+    }
+
+    function togglePlayback() {
+      if (state.playerMode === "youtube" && state.youtubeReady && state.youtubePlayer) {
+        const playerState = state.youtubePlayer.getPlayerState?.();
+        if (playerState === YT.PlayerState.PLAYING) state.youtubePlayer.pauseVideo();
+        else state.youtubePlayer.playVideo();
+        startYoutubeTimer();
+        return;
+      }
+      el.video.paused ? el.video.play() : el.video.pause();
     }
 
     function extractYoutubeId(value) {
@@ -600,7 +694,7 @@
         if (applyCueDurationDelta(index, delta)) adjusted += 1;
       });
       renderCueList();
-      updateActiveCue(true);
+      updateActiveCue(getPlaybackTime(), true);
       updateBurnPreview();
       statusMessage(`${delta > 0 ? "已延長" : "已縮短"}全片 ${adjusted} 句字幕時長 ${Math.abs(delta).toFixed(1)} 秒`);
     }
@@ -610,7 +704,7 @@
       const changed = applyCueDurationDelta(index, delta);
       updateCueTimingNode(index);
       updateStats();
-      updateActiveCue(true);
+      updateActiveCue(getPlaybackTime(), true);
       updateBurnPreview();
       statusMessage(changed
         ? `已${delta > 0 ? "延長" : "縮短"}第 ${index + 1} 句字幕 ${Math.abs(delta).toFixed(1)} 秒`
@@ -665,7 +759,7 @@
         state.activeIndex -= 1;
       }
       renderCueList();
-      updateActiveCue(true);
+      updateActiveCue(getPlaybackTime(), true);
       updateBurnPreview();
       statusMessage(`已刪除第 ${removedNumber} 句字幕`);
     }
@@ -706,13 +800,16 @@
 
     function jumpToCue(index) {
       const cue = state.cues[index];
-      el.video.currentTime = cue.start;
-      el.video.play();
+      seekToSeconds(cue.start);
+      if (state.playerMode === "youtube" && state.youtubeReady && state.youtubePlayer?.playVideo) {
+        state.youtubePlayer.playVideo();
+      } else {
+        el.video.play();
+      }
       setActiveCue(index);
     }
 
-    function updateActiveCue(force = false) {
-      const time = el.video.currentTime;
+    function updateActiveCue(time = getPlaybackTime(), force = false) {
       const index = state.cues.findIndex((cue) => time >= cue.start && time <= cue.end);
       if (!force && index === state.activeIndex) return;
       setActiveCue(index);
@@ -746,7 +843,7 @@
       refreshCueIds();
       rebuildChangedSet();
       renderCueList();
-      updateActiveCue(true);
+      updateActiveCue(getPlaybackTime(), true);
       updateBurnPreview();
       statusMessage("已套用內建清理規則，請再次人工確認");
     }
@@ -966,3 +1063,4 @@
   </script>
 </body>
 </html>
+
