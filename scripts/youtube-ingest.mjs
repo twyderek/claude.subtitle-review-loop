@@ -21,7 +21,9 @@ async function main() {
   await ensureCommand("yt-dlp");
   await ensureCommand("ffmpeg");
 
-  const metadata = await readYoutubeMetadata(options.url);
+  const metadata = options.forceWhisper
+    ? createFastMetadata(options.url)
+    : await readYoutubeMetadata(options.url);
   const videoId = metadata.id || extractVideoId(options.url) || `youtube-${Date.now()}`;
   const safeTitle = slugify(metadata.title || videoId).slice(0, 48) || videoId;
   const workDir = createUniqueWorkDir(`youtube-${videoId}-${safeTitle}`);
@@ -103,6 +105,16 @@ async function readYoutubeMetadata(url) {
   } catch {
     return { webpage_url: url };
   }
+}
+
+function createFastMetadata(url) {
+  const id = extractVideoId(url);
+  return {
+    id,
+    title: id || "youtube",
+    webpage_url: url,
+    fastMetadata: true
+  };
 }
 
 async function tryDownloadSubtitles(url, workDir) {

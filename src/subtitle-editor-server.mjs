@@ -130,6 +130,7 @@ async function ingestYoutube(payload) {
   if (payload?.rulePath) args.push("--rule", String(payload.rulePath));
   if (payload?.model) args.push("--model", String(payload.model));
   if (payload?.language) args.push("--language", String(payload.language));
+  if (payload?.forceWhisper) args.push("--force-whisper");
 
   const output = await runNode(args);
   const line = output.trim().split(/\r?\n/).filter(Boolean).at(-1);

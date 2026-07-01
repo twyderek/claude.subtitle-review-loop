@@ -4,6 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Subtitle Review Loop</title>
+  <link rel="preconnect" href="https://www.youtube.com">
+  <link rel="preconnect" href="https://www.youtube-nocookie.com">
+  <link rel="preconnect" href="https://i.ytimg.com">
+  <link rel="preconnect" href="https://www.google.com">
   <style>
     :root {
       color-scheme: dark;
@@ -173,7 +177,7 @@
         </div>
         <div class="youtube-import">
           <input id="youtubeUrl" type="url" placeholder="貼上 YouTube 影片網址">
-          <button id="importYoutube" type="button">匯入 YouTube 字幕</button>
+          <button id="importYoutube" type="button">載入 YouTube 影片</button>
         </div>
         <div id="sourceUrlRow" class="source-link">目前來源：<a id="sourceUrlLink" href="#" target="_blank" rel="noreferrer"></a></div>
         <div class="stage-tabs">
@@ -384,7 +388,17 @@
     });
 
     loadInitialProjectFromQuery();
+    warmYoutubeApi();
     updateBurnPreview();
+
+    function warmYoutubeApi() {
+      const load = () => ensureYoutubeApi().catch(() => {});
+      if ("requestIdleCallback" in window) {
+        window.requestIdleCallback(load, { timeout: 2500 });
+      } else {
+        window.setTimeout(load, 800);
+      }
+    }
 
     async function loadInitialProjectFromQuery() {
       const params = new URLSearchParams(window.location.search);
@@ -603,7 +617,7 @@
       }
 
       el.importYoutube.disabled = true;
-      statusMessage("正在匯入 YouTube 字幕，較長影片可能需要一段時間");
+      statusMessage("正在載入 YouTube 影片並準備字幕，較長影片可能需要一段時間");
       try {
         const response = await fetch("/api/youtube-ingest", {
           method: "POST",
@@ -621,7 +635,7 @@
         outputFolder = `${result.folder}/review-output`;
         updateSourceUrlDisplay(result.sourceUrl);
         showYoutubePreview(url);
-        loadSrtText(await subtitleResponse.text(), `已匯入 YouTube 字幕：${result.folder}`);
+        loadSrtText(await subtitleResponse.text(), `已載入 YouTube 影片與字幕：${result.folder}`);
       } catch (error) {
         statusMessage(`YouTube 匯入失敗：${error.message}`);
       } finally {
@@ -633,11 +647,17 @@
       const videoId = extractYoutubeId(url);
       if (!videoId) return;
       state.playerMode = "youtube";
-      state.youtubeReady = false;
+      const sameVideoReady = state.youtubeReady && state.youtubeVideoId === videoId && state.youtubePlayer?.seekTo;
+      state.youtubeReady = sameVideoReady;
       state.youtubeVideoId = videoId;
       state.pendingYoutubeSeek = null;
-      el.youtubeFrame.src = youtubeEmbedSrc(videoId);
       el.video.closest(".video-shell").classList.add("youtube-mode");
+      if (sameVideoReady) {
+        statusMessage("已載入 YouTube 預覽");
+        startYoutubeTimer();
+        return;
+      }
+      if (!state.youtubePlayer?.loadVideoById) el.youtubeFrame.removeAttribute("src");
       statusMessage("正在載入 YouTube 預覽，字幕可先校稿");
       if (state.youtubeLoadTimeout) window.clearTimeout(state.youtubeLoadTimeout);
       state.youtubeLoadTimeout = window.setTimeout(() => {
@@ -647,9 +667,9 @@
       }, 8000);
       ensureYoutubeApi().then(() => {
         if (state.youtubePlayer?.loadVideoById) {
-          state.youtubeReady = true;
           if (state.youtubeLoadTimeout) window.clearTimeout(state.youtubeLoadTimeout);
           state.youtubePlayer.loadVideoById(videoId);
+          state.youtubeReady = true;
           applyPendingYoutubeSeek();
           startYoutubeTimer();
           return;
@@ -667,6 +687,8 @@
             onError: () => statusMessage("YouTube 預覽載入失敗，請確認影片權限或直接在 YouTube 開啟來源網址")
           }
         });
+      }).catch((error) => {
+        statusMessage(`YouTube 預覽載入失敗：${error.message}`);
       });
     }
 
@@ -681,16 +703,6 @@
       el.video.closest(".video-shell").classList.remove("youtube-mode");
     }
 
-    function youtubeEmbedSrc(videoId, startSeconds = 0) {
-      const params = new URLSearchParams({
-        enablejsapi: "1",
-        origin: location.origin,
-        playsinline: "1"
-      });
-      if (startSeconds > 0) params.set("start", String(Math.floor(startSeconds)));
-      return `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?${params.toString()}`;
-    }
-
     function applyPendingYoutubeSeek() {
       if (state.pendingYoutubeSeek == null || !state.youtubeReady || !state.youtubePlayer?.seekTo) return;
       state.youtubePlayer.seekTo(Math.max(0, state.pendingYoutubeSeek), true);
@@ -701,14 +713,19 @@
     function ensureYoutubeApi() {
       if (window.YT?.Player) return Promise.resolve();
       if (window.youtubeApiPromise) return window.youtubeApiPromise;
-      window.youtubeApiPromise = new Promise((resolve) => {
+      window.youtubeApiPromise = new Promise((resolve, reject) => {
         const previous = window.onYouTubeIframeAPIReady;
         window.onYouTubeIframeAPIReady = () => {
           if (typeof previous === "function") previous();
           resolve();
         };
         const script = document.createElement("script");
+        script.async = true;
         script.src = "https://www.youtube.com/iframe_api";
+        script.onerror = () => {
+          window.youtubeApiPromise = null;
+          reject(new Error("YouTube IFrame API 載入失敗"));
+        };
         document.head.appendChild(script);
       });
       return window.youtubeApiPromise;
@@ -758,8 +775,8 @@
       if (state.playerMode === "youtube") {
         const nextTime = Math.max(0, seconds);
         state.pendingYoutubeSeek = nextTime;
-        if (state.youtubeVideoId) el.youtubeFrame.src = youtubeEmbedSrc(state.youtubeVideoId, nextTime);
         updatePlaybackTime(nextTime);
+        statusMessage(`YouTube 預覽載入中，已預排跳至 ${formatClock(nextTime)}`);
         return;
       }
       el.video.currentTime = Math.max(0, seconds);
