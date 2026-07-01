@@ -7,7 +7,7 @@ const reportPath = process.argv[4] || "workspace/media.rule-cleaned-report.md";
 
 if (!existsSync(inputPath)) {
   console.error(`錯誤：找不到輸入檔案 ${inputPath}`);
-  console.error("請先將 Whisper 產出的字幕檔命名為 media.srt 放入 workspace/ 資料夾，或指定自訂路徑：");
+  console.error("請提供任意 SRT 輸入路徑，或使用預設 workspace/media.srt：");
   console.error("  node src/apply_subtitle_rules.mjs input.srt output.srt report.md");
   process.exit(1);
 }

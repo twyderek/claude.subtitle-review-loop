@@ -1,15 +1,21 @@
 {
   "name": "claude.subtitle-review-loop",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Human-in-the-loop subtitle review workflow and browser editor.",
   "scripts": {
+    "postinstall": "node scripts/setup-check.mjs",
+    "setup:check": "node scripts/setup-check.mjs",
+    "setup:install": "node scripts/setup-check.mjs --install",
+    "prestart": "node scripts/setup-check.mjs",
     "start": "node src/subtitle-editor-server.mjs",
+    "preopen": "node scripts/setup-check.mjs",
     "open": "node scripts/start-editor.mjs",
     "sample:subtitles": "node scripts/burn-subtitles.mjs --sample",
     "burn:subtitles": "node scripts/burn-subtitles.mjs",
     "clean:subtitles": "node src/apply_subtitle_rules.mjs",
+    "local:ingest": "node scripts/local-ingest.mjs",
     "youtube:ingest": "node scripts/youtube-ingest.mjs",
     "build:toolkit": "node scripts/build-portable-toolkit.mjs"
   },

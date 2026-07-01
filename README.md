@@ -83,6 +83,19 @@ Install dependencies:
 npm install
 ```
 
+`npm install` runs a setup check and reports whether optional tools such as
+FFmpeg, yt-dlp, Python, and Whisper are available. To run the check again:
+
+```bash
+npm run setup:check
+```
+
+To install supported Python-based tools automatically:
+
+```bash
+npm run setup:install
+```
+
 Start the local subtitle editor and open it automatically:
 
 ```bash
@@ -101,7 +114,11 @@ Then open:
 http://127.0.0.1:8787/src/subtitle-editor.html
 ```
 
-Default expected local files:
+The editor starts with an empty project state by default. It does not load any
+previous project until you select files, paste a YouTube URL, or click the
+manual default-load button.
+
+Legacy default local files, loaded only when you click `手動載入專案預設`:
 
 ```text
 workspace/media.mp4
@@ -124,7 +141,31 @@ while the command window stays open.
 
 ## Generate A Draft SRT
 
-If you use local Whisper, put your video in `workspace/media.mp4`, then run:
+You do not need to rename your video to `media.mp4`. For the recommended local
+workflow, pass the real source filename and the tool will create a new dedicated
+workspace folder for that run:
+
+```bash
+npm run local:ingest -- --video "D:/path/to/source-video.mp4" --rule workspace/rule.txt
+```
+
+Outputs are saved in a folder such as:
+
+```text
+workspace/local-source-video-YYYYMMDD-HHMMSS/
+source.mp4
+draft.srt
+rule-cleaned.srt
+rule-cleaned-report.md
+local-ingest-verification.md
+review-output/
+```
+
+After the conversion completes, the browser editor opens automatically and loads
+that run's video and subtitle. Add `--no-open` if you only want to generate
+files.
+
+If you use local Whisper manually, put your video in `workspace/media.mp4`, then run:
 
 ```bash
 whisper workspace/media.mp4 --language Chinese --task transcribe --output_format srt --output_dir workspace
@@ -166,18 +207,23 @@ npm run youtube:ingest -- --url "https://www.youtube.com/watch?v=VIDEO_ID" --rul
 Default outputs are saved in a dedicated folder:
 
 ```text
-workspace/youtube-VIDEO_ID-title/
+workspace/youtube-VIDEO_ID-title-YYYYMMDD-HHMMSS/
 metadata.json
 rule.txt
 draft.srt
 rule-cleaned.srt
 rule-cleaned-report.md
 youtube-ingest-verification.md
+review-output/
 ```
 
 You can also start the browser editor and paste the YouTube URL into the
 YouTube import field. When the import completes, the generated
 `rule-cleaned.srt` loads into the editor for human review.
+
+From Codex or the command line, the editor opens automatically after a normal
+YouTube import. Add `--no-open` if you do not want this behavior. API/JSON mode
+does not open a browser window.
 
 ## Apply Subtitle Rules
 

@@ -49,6 +49,8 @@ async function waitForServer(timeoutMs = 8000) {
 }
 
 async function main() {
+  await runSetupCheck();
+
   if (await checkServer()) {
     console.log(`Subtitle editor is already running: ${editorUrl}`);
     openBrowser(editorUrl);
@@ -77,6 +79,18 @@ async function main() {
     console.error("Server did not become ready in time.");
     process.exitCode = 1;
   }
+}
+
+function runSetupCheck() {
+  return new Promise((resolve) => {
+    const checker = spawn(process.execPath, ["scripts/setup-check.mjs"], {
+      cwd: process.cwd(),
+      stdio: "inherit",
+      windowsHide: true,
+    });
+    checker.on("error", () => resolve());
+    checker.on("close", () => resolve());
+  });
 }
 
 main().catch((error) => {

@@ -16,7 +16,7 @@ const types = {
   ".jpg": "image/jpeg"
 };
 
-const reviewOutputDir = path.join(root, "workspace", "review-output");
+const defaultReviewOutputDir = path.join(root, "workspace", "review-output");
 
 http.createServer(async (req, res) => {
   const url = decodeURIComponent(req.url.split("?")[0]);
@@ -186,6 +186,7 @@ async function saveReviewPackage(payload) {
     throw new Error("Missing burn settings");
   }
 
+  const reviewOutputDir = resolveOutputFolder(payload.settings.outputFolder);
   await fsp.mkdir(reviewOutputDir, { recursive: true });
 
   const subtitlePath = path.join(reviewOutputDir, "media.edited.srt");
@@ -230,6 +231,16 @@ function normalizeBurnSettings(settings) {
     bold: Boolean(settings.bold),
     alignment: position === "top" ? 8 : position === "middle" ? 5 : 2
   };
+}
+
+function resolveOutputFolder(value) {
+  const requested = String(value || "").trim();
+  const fallback = defaultReviewOutputDir;
+  if (!requested) return fallback;
+  const resolved = path.resolve(root, requested);
+  const workspace = path.resolve(root, "workspace");
+  if (!resolved.startsWith(workspace)) return fallback;
+  return resolved;
 }
 
 function buildFfmpegStyle(settings) {

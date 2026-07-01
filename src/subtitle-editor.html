@@ -73,6 +73,10 @@
       color: var(--text); background: #0a1224; outline: none;
     }
     .youtube-import input:focus { border-color: var(--accent); }
+    .source-link { display: none; margin-top: -6px; color: var(--muted); font-size: 12px; line-height: 1.35; word-break: break-all; }
+    .source-link.active { display: block; }
+    .source-link a { color: var(--accent); text-decoration: none; }
+    .source-link a:hover { text-decoration: underline; }
     .cue-preview, .stage-panel, .settings-panel {
       border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel);
     }
@@ -96,6 +100,10 @@
     .duration-tools label { color: var(--muted); font-size: 12px; }
     .duration-tools input { width: 76px; min-height: 28px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: #091225; }
     .duration-tools button { min-height: 28px; padding: 0 9px; border-radius: 6px; }
+    .jump-tools { display: inline-flex; align-items: center; gap: 6px; padding: 5px 6px; border: 1px solid var(--line); border-radius: 8px; background: #0a1224; }
+    .jump-tools label { color: var(--muted); font-size: 12px; }
+    .jump-tools input { width: 88px; min-height: 28px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: #091225; }
+    .jump-tools button { min-height: 28px; padding: 0 9px; border-radius: 6px; }
     .search { flex: 1 1 240px; min-height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: #0a1224; outline: none; }
     .cue-list { min-height: 0; overflow: auto; padding: 12px 14px 20px; }
     .cue { display: grid; grid-template-columns: 84px 1fr; gap: 10px; margin-bottom: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
@@ -167,6 +175,7 @@
           <input id="youtubeUrl" type="url" placeholder="貼上 YouTube 影片網址">
           <button id="importYoutube" type="button">匯入 YouTube 字幕</button>
         </div>
+        <div id="sourceUrlRow" class="source-link">目前來源：<a id="sourceUrlLink" href="#" target="_blank" rel="noreferrer"></a></div>
         <div class="stage-tabs">
           <button id="stageProofread" class="active">階段 1：字幕校稿</button>
           <button id="stageBurn">階段 2：燒錄預覽</button>
@@ -194,6 +203,11 @@
           <section id="proofreadPanel" class="stage-panel active">
             <div class="tool-row">
               <input id="search" class="search" type="search" placeholder="搜尋字幕文字">
+              <div class="jump-tools" aria-label="跳至字幕段落">
+                <label for="jumpCueNumber">跳至段落</label>
+                <input id="jumpCueNumber" type="number" min="1" step="1" inputmode="numeric" placeholder="編號">
+                <button id="jumpCueButton" type="button">跳轉</button>
+              </div>
               <div class="duration-tools" aria-label="全片字幕時長調整">
                 <label for="globalDurationDelta">全片時長秒數</label>
                 <input id="globalDurationDelta" type="number" min="0.1" max="30" step="0.1" value="0.5">
@@ -276,7 +290,7 @@
   <script>
     const defaultSrtPath = "../workspace/media.rule-cleaned.srt";
     const defaultVideoPath = "../workspace/media.mp4";
-    const outputFolder = "workspace/review-output";
+    let outputFolder = "workspace/review-output";
 
     // Keep these browser cleanup rules aligned with src/apply_subtitle_rules.mjs.
     const termRules = [
@@ -315,6 +329,9 @@
       youtubePlayer: null,
       youtubeReady: false,
       youtubeTimer: null,
+      youtubeLoadTimeout: null,
+      youtubeVideoId: "",
+      pendingYoutubeSeek: null,
       videoPath: "",
       srtPath: ""
     };
@@ -323,7 +340,8 @@
       "video", "cueList", "status", "currentText", "currentMeta", "currentRuleState",
       "cueCount", "changedCount", "warningCount", "clock", "burnCaption", "burnOverlay",
       "proofreadPanel", "burnPanel", "stageProofread", "stageBurn", "search", "commandBox",
-      "globalDurationDelta", "youtubeUrl", "importYoutube", "youtubeFrame"
+      "globalDurationDelta", "jumpCueNumber", "jumpCueButton", "youtubeUrl", "importYoutube",
+      "youtubeFrame", "sourceUrlRow", "sourceUrlLink"
     ];
     const el = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
     const settingIds = ["fontFamily", "fontSize", "fontColor", "outlineColor", "outlineWidth", "subtitlePosition", "marginV", "bold"];
@@ -354,6 +372,10 @@
       state.search = event.target.value.trim();
       renderCueList();
     });
+    el.jumpCueButton.addEventListener("click", jumpToCueFromInput);
+    el.jumpCueNumber.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") jumpToCueFromInput();
+    });
     settingIds.forEach((id) => document.getElementById(id).addEventListener("input", updateBurnPreview));
 
     el.video.addEventListener("timeupdate", () => {
@@ -361,12 +383,56 @@
       updatePlaybackTime(el.video.currentTime);
     });
 
-    resetEditorState("請載入影片與字幕，或貼上 YouTube 網址匯入");
+    loadInitialProjectFromQuery();
     updateBurnPreview();
+
+    async function loadInitialProjectFromQuery() {
+      const params = new URLSearchParams(window.location.search);
+      const srtPath = params.get("srt");
+      const videoPath = params.get("video");
+      const youtubeUrl = params.get("youtube");
+      const projectFolder = params.get("project");
+
+      if (!srtPath && !videoPath && !youtubeUrl) {
+        resetEditorState("請載入影片與字幕，或貼上 YouTube 網址匯入");
+        return;
+      }
+
+      outputFolder = projectFolder ? `${projectFolder.replace(/\/+$/, "")}/review-output` : "workspace/review-output";
+
+      if (youtubeUrl) {
+        el.youtubeUrl.value = youtubeUrl;
+        updateSourceUrlDisplay(youtubeUrl);
+        showYoutubePreview(youtubeUrl);
+        state.videoPath = youtubeUrl;
+      } else if (videoPath) {
+        updateSourceUrlDisplay("");
+        showLocalVideo();
+        el.video.src = toBrowserPath(videoPath);
+        state.videoPath = videoPath;
+      }
+
+      if (srtPath) {
+        try {
+          const response = await fetch(toBrowserPath(srtPath), { cache: "no-store" });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          state.srtPath = srtPath;
+          loadSrtText(await response.text(), `已載入本次專案：${projectFolder || srtPath}`);
+        } catch (error) {
+          statusMessage(`本次專案字幕載入失敗：${error.message}`);
+        }
+      } else {
+        renderCueList();
+        updateStats();
+        statusMessage("已載入影片，請再載入字幕");
+      }
+    }
 
     async function loadDefaultAssets() {
       showLocalVideo();
+      updateSourceUrlDisplay("");
       el.video.src = defaultVideoPath;
+      outputFolder = "workspace/review-output";
       state.videoPath = "workspace/media.mp4";
       state.srtPath = "workspace/media.rule-cleaned.srt";
       try {
@@ -383,7 +449,9 @@
       if (!file) return;
       el.video.src = URL.createObjectURL(file);
       showLocalVideo();
+      updateSourceUrlDisplay("");
       state.videoPath = file.name;
+      outputFolder = "workspace/review-output";
       statusMessage(`已載入影片：${file.name}`);
     }
 
@@ -415,6 +483,8 @@
       state.videoPath = "";
       state.srtPath = "";
       el.search.value = "";
+      el.youtubeUrl.value = "";
+      updateSourceUrlDisplay("");
       showLocalVideo();
       el.video.removeAttribute("src");
       el.video.load();
@@ -548,6 +618,8 @@
 
         state.videoPath = result.sourceUrl;
         state.srtPath = result.subtitle;
+        outputFolder = `${result.folder}/review-output`;
+        updateSourceUrlDisplay(result.sourceUrl);
         showYoutubePreview(url);
         loadSrtText(await subtitleResponse.text(), `已匯入 YouTube 字幕：${result.folder}`);
       } catch (error) {
@@ -562,12 +634,23 @@
       if (!videoId) return;
       state.playerMode = "youtube";
       state.youtubeReady = false;
-      el.youtubeFrame.src = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+      state.youtubeVideoId = videoId;
+      state.pendingYoutubeSeek = null;
+      el.youtubeFrame.src = youtubeEmbedSrc(videoId);
       el.video.closest(".video-shell").classList.add("youtube-mode");
+      statusMessage("正在載入 YouTube 預覽，字幕可先校稿");
+      if (state.youtubeLoadTimeout) window.clearTimeout(state.youtubeLoadTimeout);
+      state.youtubeLoadTimeout = window.setTimeout(() => {
+        if (!state.youtubeReady && state.playerMode === "youtube") {
+          statusMessage("YouTube 預覽載入較久，仍可先編輯字幕或使用段落跳轉");
+        }
+      }, 8000);
       ensureYoutubeApi().then(() => {
         if (state.youtubePlayer?.loadVideoById) {
           state.youtubeReady = true;
+          if (state.youtubeLoadTimeout) window.clearTimeout(state.youtubeLoadTimeout);
           state.youtubePlayer.loadVideoById(videoId);
+          applyPendingYoutubeSeek();
           startYoutubeTimer();
           return;
         }
@@ -576,9 +659,12 @@
           events: {
             onReady: () => {
               state.youtubeReady = true;
+              if (state.youtubeLoadTimeout) window.clearTimeout(state.youtubeLoadTimeout);
+              applyPendingYoutubeSeek();
               startYoutubeTimer();
             },
-            onStateChange: () => startYoutubeTimer()
+            onStateChange: () => startYoutubeTimer(),
+            onError: () => statusMessage("YouTube 預覽載入失敗，請確認影片權限或直接在 YouTube 開啟來源網址")
           }
         });
       });
@@ -589,7 +675,27 @@
       stopYoutubeTimer();
       if (state.youtubePlayer?.stopVideo) state.youtubePlayer.stopVideo();
       state.youtubeReady = false;
+      state.youtubeVideoId = "";
+      state.pendingYoutubeSeek = null;
+      if (state.youtubeLoadTimeout) window.clearTimeout(state.youtubeLoadTimeout);
       el.video.closest(".video-shell").classList.remove("youtube-mode");
+    }
+
+    function youtubeEmbedSrc(videoId, startSeconds = 0) {
+      const params = new URLSearchParams({
+        enablejsapi: "1",
+        origin: location.origin,
+        playsinline: "1"
+      });
+      if (startSeconds > 0) params.set("start", String(Math.floor(startSeconds)));
+      return `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?${params.toString()}`;
+    }
+
+    function applyPendingYoutubeSeek() {
+      if (state.pendingYoutubeSeek == null || !state.youtubeReady || !state.youtubePlayer?.seekTo) return;
+      state.youtubePlayer.seekTo(Math.max(0, state.pendingYoutubeSeek), true);
+      updatePlaybackTime(Math.max(0, state.pendingYoutubeSeek));
+      state.pendingYoutubeSeek = null;
     }
 
     function ensureYoutubeApi() {
@@ -649,6 +755,13 @@
         updatePlaybackTime(Math.max(0, seconds));
         return;
       }
+      if (state.playerMode === "youtube") {
+        const nextTime = Math.max(0, seconds);
+        state.pendingYoutubeSeek = nextTime;
+        if (state.youtubeVideoId) el.youtubeFrame.src = youtubeEmbedSrc(state.youtubeVideoId, nextTime);
+        updatePlaybackTime(nextTime);
+        return;
+      }
       el.video.currentTime = Math.max(0, seconds);
     }
 
@@ -671,6 +784,22 @@
       } catch {
         return "";
       }
+    }
+
+    function updateSourceUrlDisplay(url) {
+      const value = String(url || "").trim();
+      el.sourceUrlRow.classList.toggle("active", Boolean(value));
+      el.sourceUrlLink.textContent = value;
+      if (value) {
+        el.sourceUrlLink.href = value;
+      } else {
+        el.sourceUrlLink.removeAttribute("href");
+      }
+    }
+
+    function toBrowserPath(value) {
+      if (/^https?:\/\//i.test(value)) return value;
+      return `../${String(value).replace(/^\/+/, "")}`;
     }
 
     function readCueDurationDelta(cueNode) {
@@ -798,15 +927,52 @@
       });
     }
 
-    function jumpToCue(index) {
+    function jumpToCueFromInput() {
+      const cueNumber = Number.parseInt(el.jumpCueNumber.value, 10);
+      if (!Number.isFinite(cueNumber)) {
+        statusMessage("請輸入要跳轉的字幕段落編號");
+        return;
+      }
+      const index = cueNumber - 1;
+      if (!state.cues[index]) {
+        statusMessage(`找不到第 ${cueNumber} 段字幕，目前共有 ${state.cues.length} 段`);
+        return;
+      }
+      jumpToCue(index, { focusEditor: true, play: false });
+    }
+
+    function jumpToCue(index, options = {}) {
       const cue = state.cues[index];
+      if (!cue) return;
+      const { focusEditor = false, play = true } = options;
+      if (state.search) {
+        state.search = "";
+        el.search.value = "";
+        renderCueList();
+      }
+      setStage("proofread");
       seekToSeconds(cue.start);
-      if (state.playerMode === "youtube" && state.youtubeReady && state.youtubePlayer?.playVideo) {
+      if (play && state.playerMode === "youtube" && state.youtubeReady && state.youtubePlayer?.playVideo) {
         state.youtubePlayer.playVideo();
-      } else {
+      } else if (play && state.playerMode === "local") {
         el.video.play();
       }
       setActiveCue(index);
+      scrollCueIntoView(index, focusEditor);
+      statusMessage(`已跳至第 ${index + 1} 段字幕`);
+    }
+
+    function scrollCueIntoView(index, focusEditor = false) {
+      const node = el.cueList.querySelector(`[data-index="${index}"]`);
+      if (!node) return;
+      node.scrollIntoView({ block: "center", behavior: "smooth" });
+      if (focusEditor) {
+        window.setTimeout(() => {
+          const textarea = node.querySelector("textarea");
+          textarea?.focus();
+          textarea?.setSelectionRange(textarea.value.length, textarea.value.length);
+        }, 120);
+      }
     }
 
     function updateActiveCue(time = getPlaybackTime(), force = false) {
@@ -921,6 +1087,7 @@
       el.cueCount.textContent = String(state.cues.length);
       el.changedCount.textContent = String(state.changed.size + (state.structureChanged ? 1 : 0));
       el.warningCount.textContent = String(state.cues.filter((cue) => hasRuleWarning(cue.text)).length);
+      el.jumpCueNumber.max = String(Math.max(1, state.cues.length));
     }
 
     function getBurnSettings() {

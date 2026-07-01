@@ -52,12 +52,29 @@ npm run youtube:ingest -- --url "https://www.youtube.com/watch?v=VIDEO_ID" --rul
 The import script creates a dedicated folder such as:
 
 ```text
-workspace/youtube-VIDEO_ID-title/
+workspace/youtube-VIDEO_ID-title-YYYYMMDD-HHMMSS/
 ```
 
 The browser editor can also call the same workflow through its YouTube URL
 input field. The generated `rule-cleaned.srt` is loaded into the editor when
 the import finishes.
+
+For local video files, the source file does not need to be named `media.mp4`.
+Use:
+
+```powershell
+npm run local:ingest -- --video "D:\path\to\source-video.mp4" --rule workspace\rule.txt
+```
+
+The local import workflow creates a dedicated folder such as:
+
+```text
+workspace/local-source-video-YYYYMMDD-HHMMSS/
+```
+
+Command-line imports open the editor automatically with the current run loaded
+unless `--no-open` is provided. Directly opening the editor service starts with
+an empty project state and never auto-loads previous project files.
 
 On Windows, protect Whisper transcription from console encoding failures:
 

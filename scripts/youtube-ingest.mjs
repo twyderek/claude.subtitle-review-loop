@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import os from "node:os";
 
 const root = process.cwd();
 const workspaceDir = path.join(root, "workspace");
@@ -8,7 +9,7 @@ const options = parseArgs(process.argv.slice(2));
 const jsonOutput = Boolean(options.json);
 
 if (!options.url) {
-  fail("Missing YouTube URL. Usage: node scripts/youtube-ingest.mjs --url <youtube-url> [--rule workspace/rule.txt]");
+  fail("Missing YouTube URL. Usage: node scripts/youtube-ingest.mjs --url <youtube-url> [--rule workspace/rule.txt] [--force-whisper]");
 }
 if (!isAllowedYoutubeUrl(options.url)) {
   fail("Please provide a valid YouTube URL.");
@@ -23,7 +24,7 @@ async function main() {
   const metadata = await readYoutubeMetadata(options.url);
   const videoId = metadata.id || extractVideoId(options.url) || `youtube-${Date.now()}`;
   const safeTitle = slugify(metadata.title || videoId).slice(0, 48) || videoId;
-  const workDir = path.join(workspaceDir, `youtube-${videoId}-${safeTitle}`);
+  const workDir = createUniqueWorkDir(`youtube-${videoId}-${safeTitle}`);
   mkdirSync(workDir, { recursive: true });
 
   const ruleSource = path.resolve(root, options.rule || path.join("workspace", "rule.txt"));
@@ -37,15 +38,20 @@ async function main() {
   );
 
   log(`Workspace: ${relative(workDir)}`);
-  log("Trying to download existing YouTube captions first...");
-  const subtitlePath = await tryDownloadSubtitles(options.url, workDir);
+  let subtitlePath = null;
+  if (options.forceWhisper) {
+    log("Skipping YouTube captions. Downloading audio for Whisper transcription...");
+  } else {
+    log("Trying to download existing YouTube captions first...");
+    subtitlePath = await tryDownloadSubtitles(options.url, workDir);
+  }
   let draftPath = path.join(workDir, "draft.srt");
   let sourceMode = "youtube-subtitle";
 
   if (subtitlePath) {
     copyFileSync(subtitlePath, draftPath);
   } else {
-    log("No reusable captions found. Downloading audio for Whisper transcription...");
+    if (!options.forceWhisper) log("No reusable captions found. Downloading audio for Whisper transcription...");
     await ensureCommand("whisper");
     const audioPath = await downloadAudio(options.url, workDir);
     await runWhisper(audioPath, workDir);
@@ -82,6 +88,10 @@ async function main() {
   } else {
     log(`Done: ${result.subtitle}`);
     log(`Report: ${result.report}`);
+  }
+
+  if (shouldOpenEditor()) {
+    await openEditorForResult(result);
   }
 }
 
@@ -336,11 +346,19 @@ function parseArgs(args) {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--json") parsed.json = true;
+    else if (arg === "--open") parsed.open = true;
+    else if (arg === "--no-open") parsed.noOpen = true;
+    else if (arg === "--force-whisper") parsed.forceWhisper = true;
     else if (arg.startsWith("--")) parsed[arg.slice(2)] = args[index + 1] || "";
     else if (!parsed.url) parsed.url = arg;
-    if (arg.startsWith("--") && arg !== "--json") index += 1;
+    if (arg.startsWith("--") && !["--json", "--open", "--no-open", "--force-whisper"].includes(arg)) index += 1;
   }
   return parsed;
+}
+
+function shouldOpenEditor() {
+  if (options.noOpen || jsonOutput) return false;
+  return true;
 }
 
 function extractVideoId(value) {
@@ -369,6 +387,84 @@ function slugify(value) {
     .replace(/[^\w\u4e00-\u9fff-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .replace(/-{2,}/g, "-");
+}
+
+function createUniqueWorkDir(baseName) {
+  const stamp = timestamp();
+  let candidate = path.join(workspaceDir, `${baseName}-${stamp}`);
+  let counter = 2;
+  while (existsSync(candidate)) {
+    candidate = path.join(workspaceDir, `${baseName}-${stamp}-${counter}`);
+    counter += 1;
+  }
+  mkdirSync(candidate, { recursive: true });
+  return candidate;
+}
+
+function timestamp() {
+  const now = new Date();
+  const parts = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+    String(now.getHours()).padStart(2, "0"),
+    String(now.getMinutes()).padStart(2, "0"),
+    String(now.getSeconds()).padStart(2, "0")
+  ];
+  return `${parts[0]}${parts[1]}${parts[2]}-${parts[3]}${parts[4]}${parts[5]}`;
+}
+
+async function openEditorForResult(result) {
+  const query = new URLSearchParams({
+    srt: result.subtitle,
+    youtube: result.sourceUrl,
+    project: result.folder
+  });
+  const url = `http://127.0.0.1:8787/src/subtitle-editor.html?${query.toString()}`;
+  await ensureEditorServer();
+  openBrowser(url);
+  log(`Opened editor: ${url}`);
+}
+
+async function ensureEditorServer() {
+  if (await canReachEditor()) return;
+  const child = spawn(process.execPath, ["src/subtitle-editor-server.mjs"], {
+    cwd: root,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true
+  });
+  child.unref();
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 8000) {
+    if (await canReachEditor()) return;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  throw new Error("Subtitle editor server did not become ready in time.");
+}
+
+function canReachEditor() {
+  return new Promise((resolve) => {
+    const request = (globalThis.fetch ? fetch("http://127.0.0.1:8787/src/subtitle-editor.html") : null);
+    if (request) {
+      request.then((response) => resolve(response.ok)).catch(() => resolve(false));
+      return;
+    }
+    resolve(false);
+  });
+}
+
+function openBrowser(url) {
+  const platform = os.platform();
+  if (platform === "win32") {
+    spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    return;
+  }
+  if (platform === "darwin") {
+    spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
+    return;
+  }
+  spawn("xdg-open", [url], { detached: true, stdio: "ignore" }).unref();
 }
 
 function findFirstFile(dir, extensions, excludePrefixes) {
