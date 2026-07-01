@@ -144,7 +144,7 @@
       <input id="videoFile" type="file" accept="video/*">
       <label class="file-button" for="srtFile">載入 SRT</label>
       <input id="srtFile" type="file" accept=".srt,text/plain">
-      <button id="loadDefault" class="primary">載入專案預設</button>
+      <button id="loadDefault" class="primary">手動載入專案預設</button>
       <button id="savePackage" class="success">儲存校稿包</button>
       <a class="doc-link" href="../docs/VIDEO-SUBTITLE-WORKFLOW.md" target="_blank">流程文件</a>
       <div id="status" class="status">準備載入字幕</div>
@@ -153,7 +153,7 @@
     <main class="workspace">
       <section class="viewer">
         <div class="video-shell">
-          <video id="video" controls preload="metadata" src="../workspace/media.mp4"></video>
+          <video id="video" controls preload="metadata"></video>
           <iframe id="youtubeFrame" class="youtube-frame" title="YouTube preview" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
           <div id="burnOverlay" class="burn-overlay"><div id="burnCaption" class="burn-caption"></div></div>
         </div>
@@ -311,8 +311,8 @@
       structureChanged: false,
       search: "",
       loopActive: false,
-      videoPath: "workspace/media.mp4",
-      srtPath: "workspace/media.rule-cleaned.srt"
+      videoPath: "",
+      srtPath: ""
     };
 
     const ids = [
@@ -361,7 +361,7 @@
       }
     });
 
-    loadDefaultAssets();
+    resetEditorState("請載入影片與字幕，或貼上 YouTube 網址匯入");
     updateBurnPreview();
 
     async function loadDefaultAssets() {
@@ -402,6 +402,25 @@
       renderCueList();
       updateStats();
       updateActiveCue(true);
+      updateBurnPreview();
+      statusMessage(message);
+    }
+
+    function resetEditorState(message) {
+      state.cues = [];
+      state.activeIndex = -1;
+      state.changed.clear();
+      state.structureChanged = false;
+      state.search = "";
+      state.videoPath = "";
+      state.srtPath = "";
+      el.search.value = "";
+      showLocalVideo();
+      el.video.removeAttribute("src");
+      el.video.load();
+      renderCueList();
+      updateStats();
+      setActiveCue(-1);
       updateBurnPreview();
       statusMessage(message);
     }
