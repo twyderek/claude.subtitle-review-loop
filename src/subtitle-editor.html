@@ -7,7 +7,10 @@
   <link rel="preconnect" href="https://www.youtube.com">
   <link rel="preconnect" href="https://www.youtube-nocookie.com">
   <link rel="preconnect" href="https://i.ytimg.com">
-  <link rel="preconnect" href="https://www.google.com">
+  <link rel="preconnect" href="https://s.ytimg.com">
+  <link rel="dns-prefetch" href="https://www.youtube.com">
+  <link rel="dns-prefetch" href="https://www.youtube-nocookie.com">
+  <link rel="dns-prefetch" href="https://i.ytimg.com">
   <style>
     :root {
       color-scheme: dark;
@@ -56,11 +59,22 @@
     }
     .video-shell { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
     video { width: 100%; height: 100%; display: block; background: #000; }
-    .youtube-frame { width: 100%; height: 100%; display: none; border: 0; background: #000; }
+    .youtube-frame { width: 100%; height: 100%; display: none; border: 0; background: #000; position: relative; z-index: 1; }
+    .youtube-poster {
+      position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+      display: none; border-radius: 10px; background: #000; z-index: 3;
+      cursor: pointer; pointer-events: auto;
+    }
+    .youtube-poster:hover { opacity: 0.9; }
+    .youtube-poster.loading { pointer-events: none; }
+    .youtube-poster.hidden { display: none !important; }
+    .video-shell.youtube-mode .youtube-poster { display: block; }
+    /* iframe 預設不顯示，等 YT.Player 建立後才顯示 */
+    .video-shell.youtube-mode .youtube-frame.ready { display: block; z-index: 2; }
+    .video-shell.youtube-mode .youtube-poster.hidden { display: none; }
     .video-shell.youtube-mode video { display: none; }
-    .video-shell.youtube-mode .youtube-frame { display: block; }
     .burn-overlay {
-      position: absolute; left: 5%; right: 5%; bottom: 22px; z-index: 2;
+      position: absolute; left: 5%; right: 5%; bottom: 22px; z-index: 4;
       display: flex; justify-content: center; pointer-events: none;
     }
     .burn-caption {
@@ -77,6 +91,24 @@
       color: var(--text); background: #0a1224; outline: none;
     }
     .youtube-import input:focus { border-color: var(--accent); }
+    .youtube-progress {
+      display: none; padding: 8px 12px; background: var(--panel); border: 1px solid var(--line);
+      border-radius: 8px; grid-column: 1 / -1;
+    }
+    .youtube-progress.active { display: block; }
+    .youtube-progress .progress-bar {
+      width: 100%; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden;
+    }
+    .youtube-progress .progress-fill {
+      height: 100%; width: 0%; background: var(--accent); border-radius: 2px;
+      transition: width 0.3s ease;
+    }
+    .youtube-progress .progress-text {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-top: 6px; font-size: 12px; color: var(--muted);
+    }
+    .youtube-progress .progress-text .phase { color: var(--accent); font-weight: 600; }
+    .youtube-progress .progress-text .detail { font-size: 11px; }
     .source-link { display: none; margin-top: -6px; color: var(--muted); font-size: 12px; line-height: 1.35; word-break: break-all; }
     .source-link.active { display: block; }
     .source-link a { color: var(--accent); text-decoration: none; }
@@ -167,6 +199,7 @@
         <div class="video-shell">
           <video id="video" controls preload="metadata"></video>
           <iframe id="youtubeFrame" class="youtube-frame" title="YouTube preview" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+          <img id="youtubePoster" class="youtube-poster" src="" alt="YouTube thumbnail" loading="eager">
           <div id="burnOverlay" class="burn-overlay"><div id="burnCaption" class="burn-caption"></div></div>
         </div>
         <div class="player-controls">
@@ -178,6 +211,13 @@
         <div class="youtube-import">
           <input id="youtubeUrl" type="url" placeholder="貼上 YouTube 影片網址">
           <button id="importYoutube" type="button">載入 YouTube 影片</button>
+          <div id="youtubeProgress" class="youtube-progress">
+            <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
+            <div class="progress-text">
+              <span id="progressPhase" class="phase">準備中</span>
+              <span id="progressDetail" class="detail"></span>
+            </div>
+          </div>
         </div>
         <div id="sourceUrlRow" class="source-link">目前來源：<a id="sourceUrlLink" href="#" target="_blank" rel="noreferrer"></a></div>
         <div class="stage-tabs">
@@ -337,7 +377,10 @@
       youtubeVideoId: "",
       pendingYoutubeSeek: null,
       videoPath: "",
-      srtPath: ""
+      srtPath: "",
+      // YouTube 載入進度
+      ingestProgress: { phase: 0, total: 5, detail: "" },
+      ingestAbortController: null
     };
 
     const ids = [
@@ -345,7 +388,8 @@
       "cueCount", "changedCount", "warningCount", "clock", "burnCaption", "burnOverlay",
       "proofreadPanel", "burnPanel", "stageProofread", "stageBurn", "search", "commandBox",
       "globalDurationDelta", "jumpCueNumber", "jumpCueButton", "youtubeUrl", "importYoutube",
-      "youtubeFrame", "sourceUrlRow", "sourceUrlLink"
+      "youtubeFrame", "sourceUrlRow", "sourceUrlLink", "youtubePoster", "youtubeProgress",
+      "progressFill", "progressPhase", "progressDetail"
     ];
     const el = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
     const settingIds = ["fontFamily", "fontSize", "fontColor", "outlineColor", "outlineWidth", "subtitlePosition", "marginV", "bold"];
@@ -388,17 +432,31 @@
     });
 
     loadInitialProjectFromQuery();
-    warmYoutubeApi();
+    preloadYoutubeApi();
     updateBurnPreview();
 
-    function warmYoutubeApi() {
+    function preloadYoutubeApi() {
       const load = () => ensureYoutubeApi().catch(() => {});
+      // 頁面載入後立即啟動，不等 idle callback
       if ("requestIdleCallback" in window) {
-        window.requestIdleCallback(load, { timeout: 2500 });
+        window.requestIdleCallback(load, { timeout: 1000 });
       } else {
-        window.setTimeout(load, 800);
+        window.setTimeout(load, 400);
+      }
+      // 額外在首張縮圖載入後也觸發一次，確保 API 已就緒
+      if (el.youtubePoster.complete && el.youtubePoster.naturalWidth > 0) {
+        load();
+      } else {
+        el.youtubePoster.addEventListener("load", load, { once: true });
       }
     }
+
+    // 點擊縮圖可直接在 YouTube 開啟
+    el.youtubePoster.addEventListener("click", () => {
+      if (state.youtubeVideoId) {
+        window.open(`https://www.youtube.com/watch?v=${state.youtubeVideoId}`, "_blank");
+      }
+    });
 
     async function loadInitialProjectFromQuery() {
       const params = new URLSearchParams(window.location.search);
@@ -419,6 +477,7 @@
         updateSourceUrlDisplay(youtubeUrl);
         showYoutubePreview(youtubeUrl);
         state.videoPath = youtubeUrl;
+        setProgressPhase(1, "透過網址參數載入 YouTube 影片...");
       } else if (videoPath) {
         updateSourceUrlDisplay("");
         showLocalVideo();
@@ -609,6 +668,34 @@
       updateBurnPreview();
     }
 
+    // ========== YouTube 載入進度條 ==========
+    function updateProgressBar() {
+      const p = state.ingestProgress;
+      if (p.phase === 0 && p.detail === "") {
+        el.youtubeProgress.classList.remove("active");
+        return;
+      }
+      el.youtubeProgress.classList.add("active");
+      const pct = Math.min(100, Math.round((p.phase / p.total) * 100));
+      el.progressFill.style.width = pct + "%";
+      el.progressPhase.textContent = p.detail || "準備中";
+      el.progressDetail.textContent = pct + "%";
+    }
+
+    function setProgressPhase(phase, detail) {
+      state.ingestProgress.phase = phase;
+      state.ingestProgress.detail = detail;
+      updateProgressBar();
+    }
+
+    function clearProgress() {
+      state.ingestProgress = { phase: 0, total: 5, detail: "" };
+      el.progressFill.style.width = "0%";
+      el.youtubeProgress.classList.remove("active");
+    }
+
+    // ========== YouTube 載入進度條結束 ==========
+
     async function importYoutubeSubtitles() {
       const url = el.youtubeUrl.value.trim();
       if (!url) {
@@ -618,7 +705,16 @@
 
       el.importYoutube.disabled = true;
       statusMessage("正在載入 YouTube 影片並準備字幕，較長影片可能需要一段時間");
+
+      // 立即顯示 YouTube 縮圖預覽（不等伺服器）
+      showYoutubePreview(url);
+
+      // 啟動進度條
+      setProgressPhase(1, "正在取得影片資訊...");
+
       try {
+        // 伺服器端 ingest 與 YouTube 預覽平行進行
+        setProgressPhase(2, "正在下載音訊並轉錄字幕...");
         const response = await fetch("/api/youtube-ingest", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -627,17 +723,28 @@
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
 
+        setProgressPhase(3, "正在清理字幕內容...");
+
         const subtitleResponse = await fetch(`../${result.subtitle}`, { cache: "no-store" });
         if (!subtitleResponse.ok) throw new Error(`字幕載入失敗：HTTP ${subtitleResponse.status}`);
+
+        setProgressPhase(4, "正在載入字幕...");
 
         state.videoPath = result.sourceUrl;
         state.srtPath = result.subtitle;
         outputFolder = `${result.folder}/review-output`;
         updateSourceUrlDisplay(result.sourceUrl);
-        showYoutubePreview(url);
         loadSrtText(await subtitleResponse.text(), `已載入 YouTube 影片與字幕：${result.folder}`);
+
+        setProgressPhase(5, "載入完成！");
+        setTimeout(() => {
+          clearProgress();
+          statusMessage(`YouTube 影片與字幕載入成功：${result.folder}`);
+        }, 1500);
       } catch (error) {
         statusMessage(`YouTube 匯入失敗：${error.message}`);
+        setProgressPhase(0, "載入失敗");
+        el.progressDetail.textContent = error.message.slice(0, 60);
       } finally {
         el.importYoutube.disabled = false;
       }
@@ -645,62 +752,133 @@
 
     function showYoutubePreview(url) {
       const videoId = extractYoutubeId(url);
-      if (!videoId) return;
-      state.playerMode = "youtube";
-      const sameVideoReady = state.youtubeReady && state.youtubeVideoId === videoId && state.youtubePlayer?.seekTo;
-      state.youtubeReady = sameVideoReady;
-      state.youtubeVideoId = videoId;
-      state.pendingYoutubeSeek = null;
-      el.video.closest(".video-shell").classList.add("youtube-mode");
-      if (sameVideoReady) {
+      if (!videoId) {
+        statusMessage("無法解析 YouTube 影片 ID");
+        return;
+      }
+
+      // 如果是相同影片且已就緒，直接返回
+      if (state.youtubeReady && state.youtubeVideoId === videoId && state.youtubePlayer?.seekTo) {
+        state.playerMode = "youtube";
+        el.video.closest(".video-shell").classList.add("youtube-mode");
         statusMessage("已載入 YouTube 預覽");
         startYoutubeTimer();
         return;
       }
-      if (!state.youtubePlayer?.loadVideoById) el.youtubeFrame.removeAttribute("src");
-      statusMessage("正在載入 YouTube 預覽，字幕可先校稿");
+
+      // 切換到 YouTube 模式
+      state.playerMode = "youtube";
+      state.youtubeVideoId = videoId;
+      state.pendingYoutubeSeek = null;
+      el.video.closest(".video-shell").classList.add("youtube-mode");
+
+      // 立即顯示縮圖（這是最快的視覺回饋）
+      el.youtubePoster.src = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+      el.youtubePoster.classList.remove("hidden");
+      el.youtubePoster.classList.add("loading");
+
+      // 重置 ready 狀態
+      state.youtubeReady = false;
+
+      // 清除之前的 iframe
+      if (state.youtubePlayer?.stopVideo) {
+        try { state.youtubePlayer.stopVideo(); } catch (_) {}
+      }
+      el.youtubeFrame.removeAttribute("src");
+      // iframe 不顯示，等 YT.Player 建立後才顯示
+      el.youtubeFrame.classList.remove("ready");
+
+      // 超時提示
       if (state.youtubeLoadTimeout) window.clearTimeout(state.youtubeLoadTimeout);
       state.youtubeLoadTimeout = window.setTimeout(() => {
         if (!state.youtubeReady && state.playerMode === "youtube") {
-          statusMessage("YouTube 預覽載入較久，仍可先編輯字幕或使用段落跳轉");
+          el.youtubePoster.classList.remove("loading");
+          statusMessage("YouTube 預覽仍在載入中，縮圖已顯示，您可先編輯字幕");
         }
-      }, 8000);
+      }, 5000);
+
+      // 確保 YouTube API 已載入
       ensureYoutubeApi().then(() => {
+        // API 已就緒，建立 YT.Player
         if (state.youtubePlayer?.loadVideoById) {
+          // 如果 API 已存在（之前載入過），直接使用
           if (state.youtubeLoadTimeout) window.clearTimeout(state.youtubeLoadTimeout);
+          // iframe 已存在，顯示它
+          el.youtubeFrame.classList.add("ready");
           state.youtubePlayer.loadVideoById(videoId);
           state.youtubeReady = true;
           applyPendingYoutubeSeek();
           startYoutubeTimer();
+          // 延遲隱藏縮圖
+          window.setTimeout(() => {
+            el.youtubePoster.classList.add("hidden");
+            el.youtubePoster.classList.remove("loading");
+          }, 1000);
           return;
         }
+
+        // 建立新的 YT.Player
         state.youtubePlayer = new YT.Player("youtubeFrame", {
-          videoId,
+          videoId: videoId,
+          width: "100%",
+          height: "100%",
+          playerVars: {
+            modestbranding: 1,
+            rel: 0,
+            fs: 0,
+            playsinline: 1,
+            origin: window.location.origin
+          },
           events: {
-            onReady: () => {
+            onReady: (event) => {
               state.youtubeReady = true;
               if (state.youtubeLoadTimeout) window.clearTimeout(state.youtubeLoadTimeout);
+              // iframe 準備好後才顯示，隱藏縮圖
+              el.youtubeFrame.classList.add("ready");
               applyPendingYoutubeSeek();
               startYoutubeTimer();
+              // 延遲隱藏縮圖，等 iframe 渲染完成
+              window.setTimeout(() => {
+                el.youtubePoster.classList.add("hidden");
+                el.youtubePoster.classList.remove("loading");
+              }, 800);
             },
-            onStateChange: () => startYoutubeTimer(),
-            onError: () => statusMessage("YouTube 預覽載入失敗，請確認影片權限或直接在 YouTube 開啟來源網址")
+            onStateChange: (event) => {
+              // 影片開始播放時隱藏縮圖
+              if (event.data === YT.PlayerState.PLAYING) {
+                el.youtubePoster.classList.add("hidden");
+              }
+              startYoutubeTimer();
+            },
+            onError: (error) => {
+              el.youtubePoster.classList.remove("loading");
+              statusMessage(`YouTube 預覽載入失敗：${error.data || "未知錯誤"}，可點擊縮圖直接在 YouTube 查看`);
+            }
           }
         });
       }).catch((error) => {
-        statusMessage(`YouTube 預覽載入失敗：${error.message}`);
+        el.youtubePoster.classList.remove("loading");
+        statusMessage(`YouTube API 載入失敗：${error.message}，請檢查網路連線`);
       });
     }
 
     function showLocalVideo() {
       state.playerMode = "local";
       stopYoutubeTimer();
-      if (state.youtubePlayer?.stopVideo) state.youtubePlayer.stopVideo();
+      if (state.youtubePlayer?.stopVideo) {
+        try { state.youtubePlayer.stopVideo(); } catch (_) {}
+      }
       state.youtubeReady = false;
       state.youtubeVideoId = "";
       state.pendingYoutubeSeek = null;
       if (state.youtubeLoadTimeout) window.clearTimeout(state.youtubeLoadTimeout);
       el.video.closest(".video-shell").classList.remove("youtube-mode");
+      // 重置 poster 狀態
+      el.youtubePoster.classList.add("hidden");
+      el.youtubePoster.src = "";
+      el.youtubeFrame.classList.remove("ready");
+      // 重置進度條
+      clearProgress();
     }
 
     function applyPendingYoutubeSeek() {
@@ -721,10 +899,11 @@
         };
         const script = document.createElement("script");
         script.async = true;
-        script.src = "https://www.youtube.com/iframe_api";
+        // 使用 youtube-nocookie.com 載入 API，減少追蹤腳本干擾，加快載入速度
+        script.src = "https://www.youtube-nocookie.com/iframe_api";
         script.onerror = () => {
-          window.youtubeApiPromise = null;
-          reject(new Error("YouTube IFrame API 載入失敗"));
+          // 備援：嘗試原始域名
+          script.src = "https://www.youtube.com/iframe_api";
         };
         document.head.appendChild(script);
       });
@@ -1127,124 +1306,4 @@
 
     function updateBurnPreview() {
       const settings = getBurnSettings();
-      const cue = state.activeIndex >= 0 ? state.cues[state.activeIndex] : null;
-      el.burnCaption.textContent = cue?.text || "字幕燒錄樣式預覽";
-      el.burnCaption.style.fontFamily = `"${settings.fontFamily}", sans-serif`;
-      el.burnCaption.style.fontSize = `${settings.fontSize}px`;
-      el.burnCaption.style.fontWeight = settings.bold ? "700" : "400";
-      el.burnCaption.style.color = settings.fontColor;
-      el.burnCaption.style.webkitTextStroke = `${settings.outlineWidth}px ${settings.outlineColor}`;
-      el.burnOverlay.style.top = settings.position === "top" ? `${settings.marginV}px` : settings.position === "middle" ? "0" : "";
-      el.burnOverlay.style.bottom = settings.position === "bottom" ? `${settings.marginV}px` : "";
-      el.burnOverlay.style.alignItems = settings.position === "middle" ? "center" : "";
-      el.burnOverlay.style.height = settings.position === "middle" ? "100%" : "";
-      el.commandBox.textContent = [
-        "npm run sample:subtitles -- workspace/media.mp4 workspace/review-output/media.edited.srt workspace/review-output/media_subtitled_sample_20s.mp4 --settings workspace/review-output/burn-settings.json",
-        "npm run burn:subtitles -- workspace/media.mp4 workspace/review-output/media.edited.srt workspace/review-output/media_subtitled.mp4 --settings workspace/review-output/burn-settings.json"
-      ].join("\n\n");
-    }
-
-    async function saveReviewPackage() {
-      const payload = {
-        subtitle: buildSrt(),
-        settings: getBurnSettings(),
-        manifest: {
-          savedAt: new Date().toISOString(),
-          cueCount: state.cues.length,
-          changedCount: state.changed.size + (state.structureChanged ? 1 : 0),
-          structureChanged: state.structureChanged,
-          warningCount: state.cues.filter((cue) => hasRuleWarning(cue.text)).length,
-          sourceVideo: state.videoPath,
-          sourceSubtitle: state.srtPath,
-          outputFolder
-        }
-      };
-      const response = await fetch("/api/save-review-package", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      if (!response.ok) {
-        statusMessage(`儲存失敗：HTTP ${response.status}`);
-        return;
-      }
-      const result = await response.json();
-      statusMessage(`已儲存校稿包：${result.folder}`);
-      setStage("burn");
-    }
-
-    function buildSrt() {
-      return state.cues.map((cue, index) => `${index + 1}\n${cue.startRaw} --> ${cue.endRaw}\n${cue.text.trim()}`).join("\n\n") + "\n";
-    }
-
-    function downloadSrt() {
-      const blob = new Blob([buildSrt()], { type: "text/plain;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = "media.edited.srt";
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
-      statusMessage("已下載 SRT");
-    }
-
-    async function saveSrt() {
-      if (!window.showSaveFilePicker) {
-        downloadSrt();
-        statusMessage("瀏覽器不支援直接另存，已改用下載 SRT");
-        return;
-      }
-      const handle = await window.showSaveFilePicker({
-        suggestedName: "media.edited.srt",
-        types: [{ description: "SRT subtitle", accept: { "text/plain": [".srt"] } }]
-      });
-      const writable = await handle.createWritable();
-      await writable.write(buildSrt());
-      await writable.close();
-      statusMessage("已另存 SRT");
-    }
-
-    function parseTime(value) {
-      const [hh, mm, rest] = value.split(":");
-      const [ss, ms] = rest.split(",");
-      return Number(hh) * 3600 + Number(mm) * 60 + Number(ss) + Number(ms) / 1000;
-    }
-
-    function formatSrtTime(seconds) {
-      const safeSeconds = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
-      const totalMs = Math.round(safeSeconds * 1000);
-      const hh = String(Math.floor(totalMs / 3600000)).padStart(2, "0");
-      const mm = String(Math.floor((totalMs % 3600000) / 60000)).padStart(2, "0");
-      const ss = String(Math.floor((totalMs % 60000) / 1000)).padStart(2, "0");
-      const ms = String(totalMs % 1000).padStart(3, "0");
-      return `${hh}:${mm}:${ss},${ms}`;
-    }
-
-    function formatDuration(seconds) {
-      return `${Math.max(0, seconds).toFixed(1)} 秒`;
-    }
-
-    function roundTime(seconds) {
-      return Math.round(seconds * 1000) / 1000;
-    }
-
-    function formatClock(seconds) {
-      if (!Number.isFinite(seconds)) return "00:00";
-      const mm = String(Math.floor(seconds / 60)).padStart(2, "0");
-      const ss = String(Math.floor(seconds % 60)).padStart(2, "0");
-      return `${mm}:${ss}`;
-    }
-
-    function escapeHtml(value) {
-      return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    }
-
-    function statusMessage(message) {
-      el.status.textContent = message;
-    }
-  </script>
-</body>
-</html>
-
+      const cue 

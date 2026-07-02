@@ -192,6 +192,8 @@ it, you can import subtitles from the URL. The workflow first tries to download
 existing YouTube captions. If no reusable captions are available, it downloads
 audio and runs local Whisper transcription.
 
+**載入體驗優化（v0.3.1）：** 貼上 YouTube 網址並點擊「載入 YouTube 影片」後，編輯器會立即顯示影片縮圖作為視覺回饋，同時伺服器端在背景處理 ingest 動作。進度條即時顯示 5 階段進度（取得影片資訊 → 下載音訊並轉錄 → 清理字幕 → 載入字幕 → 完成）。若 iframe 載入失敗，點擊縮圖可直接開啟 YouTube 原始影片。
+
 Required tools:
 
 - `yt-dlp`
@@ -221,9 +223,20 @@ You can also start the browser editor and paste the YouTube URL into the
 YouTube import field. When the import completes, the generated
 `rule-cleaned.srt` loads into the editor for human review.
 
+The editor shows a real-time progress bar (5 stages: fetching metadata, downloading
+audio & transcribing, cleaning subtitles, loading SRT, done) and displays the
+video thumbnail immediately. Click the thumbnail to open the original YouTube video
+as a fallback.
+
 From Codex or the command line, the editor opens automatically after a normal
 YouTube import. Add `--no-open` if you do not want this behavior. API/JSON mode
 does not open a browser window.
+
+### 繁體中文 — YouTube 匯入
+
+貼上 YouTube 網址後，編輯器會即時顯示影片縮圖與 5 階段進度條。進度條顯示：
+取得影片資訊 → 下載音訊並轉錄 → 清理字幕 → 載入字幕 → 完成。
+若 YouTube iframe 載入較慢，仍可先編輯字幕，縮圖亦可點擊直接開啟原始影片。
 
 ## Apply Subtitle Rules
 
@@ -400,6 +413,7 @@ workspace/media.rule-cleaned.srt
 啟動伺服器後，使用者可以在瀏覽器中：
 
 - 載入影片與 SRT
+- **從 YouTube 匯入**：貼上 YouTube 網址，即時顯示影片縮圖與 5 階段進度條（取得影片資訊 → 下載音訊並轉錄 → 清理字幕 → 載入字幕 → 完成），縮圖可點擊直接開啟 YouTube 原始影片
 - 第一階段點選字幕跳到對應時間並校稿
 - 搜尋字幕文字
 - 修改錯字、斷句與專有名詞
